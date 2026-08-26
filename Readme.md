@@ -80,8 +80,8 @@ Each tool produces dedicated finding types with severity, evidence, and remediat
 Clone the repository and initialize the local database:
 
 ```bash
-git clone <repository-url> antlion
-cd antlion
+git clone https://github.com/antlionsec/Antlion 
+cd Antlion
 
 npm install              # or: bun install
 
