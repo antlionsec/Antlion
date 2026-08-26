@@ -1,0 +1,276 @@
+// Antlion — Bug Bounty Recon Workspace.
+// Local-first SQLite database with full project isolation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// PROJECT MANAGEMENT
+// ============================================================
+
+model Project {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  color           String   @default("slate") // slate|teal|amber|rose|emerald|violet|cyan
+  tags            String   @default("") // comma-separated
+  status          String   @default("active") // active|archived|soft-deleted
+  encryptionEnabled Boolean @default(false)
+
+  // Linked program (optional - if discovered via discovery engine)
+  programId       String?
+  programName     String?
+  programPlatform String?
+
+  // Stats (denormalized for fast dashboard queries)
+  targetCount     Int      @default(0)
+  excludedCount   Int      @default(0)
+  runCount        Int      @default(0)
+  findingCount    Int      @default(0)
+  lastActivityAt DateTime @default(now())
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  targets         Target[]
+  excludedTargets ExcludedTarget[]
+  pipelineRuns    PipelineRun[]
+  findings        Finding[]
+  notes           Note[]
+  tags_m2m        ProjectTag[]
+  auditLogs       AuditLog[]
+}
+
+model ProjectTag {
+  id        String  @id @default(uuid())
+  projectId String
+  name      String
+  color     String  @default("slate")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
+}
+
+// ============================================================
+// PROGRAM DISCOVERY
+// ============================================================
+
+// Catalog of discovered/cached bug bounty programs (from HackerOne, Bugcrowd, etc.)
+model Program {
+  id              String   @id @default(uuid())
+  externalId      String   @unique // platform-specific id
+  name            String
+  platform        String   // hackerone|bugcrowd|intigriti|yeswehack|immunefi|custom
+  type            String   // bbp|vdp|private|crowdsourced|web3
+  url             String?
+  state           String   @default("active") // active|paused|closed
+  logo            String?
+
+  // Stats
+  maxBounty       Int?
+  avgBounty       Int?
+  totalPaid       Int?
+  resolvedReports Int?
+  acceptedReports Int?
+  avgResponseHrs  Float?
+  avgResolutionHrs Float?
+  acceptanceRate  Float?
+
+  // Metadata
+  industry        String?
+  languages       String   @default("[]") // JSON array
+  region          String?
+  scopeUpdated    DateTime?
+  firstSeenAt     DateTime @default(now())
+  lastSyncAt      DateTime @default(now())
+  isNew           Boolean  @default(false)
+
+  // Scope stored as JSON-encoded arrays
+  inScopeRaw     String   @default("[]")
+  outScopeRaw    String   @default("[]")
+  scopeHistory   String   @default("[]")
+
+  policy          String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([platform, state])
+  @@index([type])
+}
+
+// ============================================================
+// TARGETS / SCOPE
+// ============================================================
+
+model Target {
+  id          String   @id @default(uuid())
+  projectId   String
+  value       String   // the actual target (domain, IP, CIDR, URL, wildcard)
+  type        String   // wildcard|domain|url|ip|cidr|mobile|api
+  origin      String   @default("manual") // manual|program|paste|import
+  validated   Boolean  @default(true)
+  metadata    String   @default("{}") // JSON blob for extra info
+  inScope     Boolean  @default(true)
+  addedAt     DateTime @default(now())
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@unique([projectId, value])
+}
+
+model ExcludedTarget {
+  id          String   @id @default(uuid())
+  projectId   String
+  value       String
+  type        String
+  origin      String   @default("program") // program|manual
+  reason      String?
+  addedAt     DateTime @default(now())
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@unique([projectId, value])
+}
+
+// ============================================================
+// PIPELINE EXECUTION
+// ============================================================
+
+model PipelineRun {
+  id          String   @id @default(uuid())
+  projectId   String
+  status      String   @default("pending") // pending|running|paused|completed|failed|cancelled
+  config      String   @default("{}") // JSON: stages, concurrency, rate limits, etc.
+  trigger     String   @default("manual") // manual|scheduled|retry
+  checkpoint  String   @default("{}") // JSON: stage-level resume state
+
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  etaSeconds  Int?
+  resourceStats String @default("{}") // CPU/RAM samples
+
+  totalStages   Int    @default(0)
+  doneStages    Int    @default(0)
+  findingDelta  Int    @default(0)
+  assetDelta    Int    @default(0)
+
+  errorMessage String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stages      PipelineStage[]
+
+  @@index([projectId, status])
+}
+
+model PipelineStage {
+  id          String   @id @default(uuid())
+  runId       String
+  name        String   // e.g. "subdomain-discovery", "nuclei-scan"
+  tool        String   // e.g. "subfinder", "nuclei"
+  order       Int
+  status      String   @default("pending") // pending|running|completed|failed|skipped|paused
+  progress    Int      @default(0) // 0-100
+  logLines    String   @default("[]") // JSON array of log entries
+  outputSummary String @default("{}") // counts, durations, etc.
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  error       String?
+
+  run         PipelineRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+// ============================================================
+// FINDINGS
+// ============================================================
+
+model Finding {
+  id          String   @id @default(uuid())
+  projectId   String
+  runId       String?
+  type        String   // vulnerability|asset|subdomain|port|secret|takeover|endpoint|tech
+  severity    String   @default("info") // critical|high|medium|low|info
+  title       String
+  description String?
+  evidence    String?
+  remediation String?
+  target      String?
+  url         String?
+  cvssScore   Float?
+  cveId       String?
+  tags        String   @default("")
+  status      String   @default("new") // new|todo|in-progress|reported|closed|false-positive
+  source      String? // tool name
+  rawOutput   String?
+
+  firstSeenAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  notes       Note[]
+
+  @@index([projectId, severity])
+  @@index([projectId, type])
+  @@index([projectId, status])
+}
+
+model Note {
+  id          String   @id @default(uuid())
+  projectId   String
+  findingId   String?
+  content     String
+  pinned      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  finding     Finding? @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([findingId])
+}
+
+// ============================================================
+// SETTINGS / AUDIT / BACKUPS
+// ============================================================
+
+model Setting {
+  id          String   @id
+  value       String
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  projectId   String?
+  actor       String   @default("user")
+  action      String
+  target      String?
+  details     String?
+  createdAt   DateTime @default(now())
+
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model BackupRecord {
+  id          String   @id @default(uuid())
+  path        String
+  size        Int
+  kind        String   @default("automatic") // automatic|manual|pre-import
+  createdAt   DateTime @default(now())
+}

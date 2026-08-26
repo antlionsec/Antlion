@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Antlion Report — GitLab — HackerOne</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --card: #1a1f2e;
+    --fg: #e8eef5;
+    --muted: #94a3b8;
+    --border: #2a3142;
+    --accent: #3ec7b8;
+  }
+  body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; padding: 40px; line-height: 1.6; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 32px; }
+  h1 { font-size: 28px; margin: 0 0 8px 0; color: var(--fg); }
+  h2 { font-size: 22px; margin: 32px 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 8px 0; color: var(--accent); }
+  .meta { color: var(--muted); font-size: 13px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 16px 0 32px 0; }
+  .stat { background: var(--card); padding: 16px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
+  .stat-value { font-size: 28px; font-weight: 700; }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 4px; }
+  .finding { background: var(--card); padding: 16px; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0; }
+  .finding-title { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .finding-target { color: var(--accent); font-size: 13px; font-family: "SF Mono", Menlo, monospace; }
+  .finding-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  pre { background: #0a0f1a; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; color: #cbd5e1; }
+  code { font-family: "SF Mono", Menlo, monospace; }
+  .severity-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 16px 0; }
+  .severity-card { padding: 12px; border-radius: 6px; text-align: center; color: white; }
+  .severity-card .count { font-size: 24px; font-weight: 700; }
+  .severity-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  footer { margin-top: 60px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+  .badge { display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;background:#2a3142;color:#cbd5e1;margin-left:8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Antlion Report — GitLab — HackerOne</h1>
+    <div class="meta">
+      Project ID: <code>8bc10925-b50a-47b5-b3c3-65495535cc99</code> · Generated: 2026-08-26T14:14:24.162Z · Runs: 2 · Targets: 26
+    </div>
+  </header>
+
+  <h2>Executive Summary</h2>
+  <p>This report summarizes findings from automated reconnaissance and vulnerability scanning conducted against the in-scope assets defined in this Antlion project. The pipeline executed 2 run(s), producing 10 findings across 26 targets.</p>
+
+  <div class="severity-grid">
+    
+    <div class="severity-card" style="background:#dc2626;">
+      <div class="count">0</div>
+      <div class="label">critical</div>
+    </div>
+    <div class="severity-card" style="background:#ea580c;">
+      <div class="count">0</div>
+      <div class="label">high</div>
+    </div>
+    <div class="severity-card" style="background:#d97706;">
+      <div class="count">2</div>
+      <div class="label">medium</div>
+    </div>
+    <div class="severity-card" style="background:#0284c7;">
+      <div class="count">2</div>
+      <div class="label">low</div>
+    </div>
+    <div class="severity-card" style="background:#64748b;">
+      <div class="count">6</div>
+      <div class="label">info</div>
+    </div>
+  </div>
+
+  <h2>Scope</h2>
+  <h3>In-Scope Assets (26)</h3>
+  <table>
+    <thead><tr><th>Target</th><th>Type</th><th>Origin</th></tr></thead>
+    <tbody>
+    <tr><td><code>google.com</code></td><td>domain</td><td>manual</td></tr><tr><td><code>*.gitlab.net</code></td><td>wildcard</td><td>program</td></tr><tr><td><code>*.gitlab.org</code></td><td>wildcard</td><td>program</td></tr><tr><td><code>*.gitlap.com</code></td><td>wildcard</td><td>program</td></tr><tr><td><code>customers.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>registry.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>about.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>docs.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>design.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>advisories.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab-runner</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitaly</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab-pages</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab-shell</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab-vscode-extension</code></td><td>url</td><td>program</td></tr><tr><td><code>Your Own GitLab Instance</code></td><td>other</td><td>program</td></tr><tr><td><code>Other non-production infrastructure</code></td><td>other</td><td>program</td></tr><tr><td><code>GitLab for Jira Cloud</code></td><td>other</td><td>program</td></tr><tr><td><code>GitLab for Jira Cloud Plugin</code></td><td>other</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/opstrace/</code></td><td>url</td><td>program</td></tr><tr><td><code>Static websites</code></td><td>other</td><td>program</td></tr><tr><td><code>license.gitlab.com</code></td><td>url</td><td>program</td></tr><tr><td><code>https://gitlab.com/gitlab-org/gitlab-workhorse</code></td><td>url</td><td>program</td></tr><tr><td><code>atlassian.com</code></td><td>domain</td><td>program</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h3>Out-of-Scope Assets (39)</h3>
+  <table>
+    <thead><tr><th>Target</th><th>Type</th><th>Reason</th></tr></thead>
+    <tbody>
+    <tr><td><code>*.gitlab.cn</code></td><td>wildcard</td><td>Program-defined exclusion</td></tr><tr><td><code>*.runway.gitlab.net</code></td><td>wildcard</td><td>Program-defined exclusion</td></tr><tr><td><code>*.gitlab-private.org</code></td><td>wildcard</td><td>Program-defined exclusion</td></tr><tr><td><code>*.service-now.com</code></td><td>wildcard</td><td>Program-defined exclusion</td></tr><tr><td><code>dashboards.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>alerts.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>support.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>shop.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>forum.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>status.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>partners.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>aptly.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>translate.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>federal-support.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>us-federal-gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>ir.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>levelup.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlab.biterg.io</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlabsandbox.net</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlabdemo.cloud</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlabtraining.cloud</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>packages.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>https://gitlab.com/gitlab-org/cli/</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>https://gitlab.com/gitlab-org/opstrace/opstrace-ui</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>https://gitlab.com/gitlab-org/opstrace/opstrace</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>docs.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>about.gitlab.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>*.gitlab.net</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>*.gitlap.com</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>*.gitter.im</code></td><td>wildcard</td><td>Program-defined exclusion</td></tr><tr><td><code>blog.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>update.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>files.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>next.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>beta.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>ws*.gitter.im</code></td><td>other</td><td>Program-defined exclusion</td></tr><tr><td><code>api.gitter.im</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlab.net</code></td><td>url</td><td>Program-defined exclusion</td></tr><tr><td><code>gitlap.com</code></td><td>url</td><td>Program-defined exclusion</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Findings (10)</h2>
+  
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#d97706;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">medium</span> Missing X-Content-Type-Options Header</div>
+    <div class="finding-target">https://registry.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">The endpoint does not send X-Content-Type-Options: nosniff. Browsers may MIME-sniff responses and interpret content as a type other than declared, enabling style- or script-injection attacks in some contexts.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>curl -sI https://registry.gitlab.com | grep -i x-content-type
+(no output)</pre>
+    <h3 style="margin-top:12px;">Remediation</h3><p style="font-size:13px;">Add &#39;X-Content-Type-Options: nosniff&#39; to responses for all endpoints serving user-controlled or non-static content.</p>
+    <div class="finding-meta">
+      Source: nuclei · Type: vulnerability · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#d97706;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">medium</span> Content-Security-Policy Header Not Set</div>
+    <div class="finding-target">https://about.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">The response does not include a Content-Security-Policy header. Without a CSP, the page has no browser-enforced restriction on script sources, which materially weakens defenses against XSS payload execution.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>curl -sI https://about.gitlab.com | grep -i content-security
+(no output)</pre>
+    <h3 style="margin-top:12px;">Remediation</h3><p style="font-size:13px;">Return a Content-Security-Policy header with an explicit allowlist of script/style/frame sources. Start in report-only mode, then enforce once verified.</p>
+    <div class="finding-meta">
+      Source: nuclei · Type: vulnerability · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#0284c7;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">low</span> X-Frame-Options Header Not Set</div>
+    <div class="finding-target">https://design.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">The response lacks X-Frame-Options (and no frame-ancestors CSP directive was observed), leaving the page embeddable in third-party frames for clickjacking-style attacks.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>curl -sI https://design.gitlab.com | grep -i x-frame
+(no output)</pre>
+    <h3 style="margin-top:12px;">Remediation</h3><p style="font-size:13px;">Send &#39;X-Frame-Options: DENY&#39; (or SAMEORIGIN), or a CSP frame-ancestors directive that names allowed framers.</p>
+    <div class="finding-meta">
+      Source: nuclei · Type: vulnerability · Status: todo · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#0284c7;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">low</span> Strict-Transport-Security Header Missing</div>
+    <div class="finding-target">https://docs.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">The host serves HTTPS but does not advertise HSTS, so a client can be downgraded to HTTP on first contact or after the max-age window expires.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>curl -sI https://docs.gitlab.com | grep -i strict-transport
+(no output)</pre>
+    <h3 style="margin-top:12px;">Remediation</h3><p style="font-size:13px;">Add a Strict-Transport-Security header (start with a short max-age, then raise to at least 31536000 once confident).</p>
+    <div class="finding-meta">
+      Source: nuclei · Type: vulnerability · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Live host confirmed: registry.gitlab.com</div>
+    <div class="finding-target">https://registry.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">Responded to probing with HTTP 200 and a valid TLS chain.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>registry.gitlab.com [200] [cdn] [l] https://registry.gitlab.com</pre>
+    
+    <div class="finding-meta">
+      Source: httpx · Type: asset · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Archived endpoint: /-/manifest.json</div>
+    <div class="finding-target">https://gitlab.com/-/manifest.json</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">Historical URL surfaced by gau; flagged for review in the URL inventory.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>GET https://gitlab.com/-/manifest.json [200]</pre>
+    
+    <div class="finding-meta">
+      Source: gau · Type: endpoint · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Archived endpoint: /.well-known/security.txt</div>
+    <div class="finding-target">https://about.gitlab.com/.well-known/security.txt</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">Historical URL surfaced by gau from the Wayback snapshot; probed live as part of the URL discovery stage.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>GET https://about.gitlab.com/.well-known/security.txt [200]</pre>
+    
+    <div class="finding-meta">
+      Source: gau · Type: endpoint · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Subdomain discovered: advisories.gitlab.com</div>
+    <div class="finding-target">https://advisories.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">Resolved via passive sources and confirmed live by the probing stage.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>advisories.gitlab.com [200] [title] GitLab Advisory Database</pre>
+    
+    <div class="finding-meta">
+      Source: subfinder · Type: subdomain · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Subdomain discovered: customers.gitlab.com</div>
+    <div class="finding-target">https://customers.gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">Resolved via passive sources and confirmed live by the probing stage.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>customers.gitlab.com [200] [title] GitLab</pre>
+    
+    <div class="finding-meta">
+      Source: subfinder · Type: subdomain · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+  <div class="finding">
+    <div class="finding-title"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#64748b;color:white;font-size:11px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">info</span> Technology fingerprint: Nginx</div>
+    <div class="finding-target">https://gitlab.com</div>
+    <p style="margin:8px 0 0 0;font-size:13px;">httpx identified Nginx as the fronting server from Server and header-ordering signals. Useful for version-specific template selection in later stages.</p>
+    <h3 style="margin-top:12px;">Evidence</h3><pre>[nginx] [200] https://gitlab.com</pre>
+    
+    <div class="finding-meta">
+      Source: httpx · Type: tech · Status: new · First seen: 2026-08-26T11:43:00.000Z
+    </div>
+  </div>
+
+  <footer>
+    Generated by Antlion — local-first bug bounty recon workspace.
+    All findings subject to ethical disclosure policies of the originating program.
+  </footer>
+</div>
+</body>
+</html>
