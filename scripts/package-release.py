@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # ANTLION — release packaging script (CLEAN build)
 #
-# Builds download/antlion-v0.5.0.zip — a clean, structured, ready-to-run
-# snapshot of the project with optional/dev-only files stripped:
+# Builds download/antlion-v<version>.zip (version from package.json) — a clean,
+# structured, ready-to-run snapshot of the project with optional/dev-only files
+# stripped:
 #
 #   antlion/
 #     README.md, LICENSE, package.json, configs, .env.example, .gitignore
@@ -25,10 +26,13 @@
 # None of these are referenced by README.md, package.json or src/.
 
 import os
+import json
 import zipfile
 
 ROOT = "/home/z/my-project"
-OUT = os.path.join(ROOT, "download", "antlion-v0.5.0.zip")
+with open(os.path.join(ROOT, "package.json")) as f:
+    _VERSION = json.load(f)["version"]
+OUT = os.path.join(ROOT, "download", f"antlion-v{_VERSION}.zip")
 PREFIX = "antlion"
 
 ROOT_FILES = [

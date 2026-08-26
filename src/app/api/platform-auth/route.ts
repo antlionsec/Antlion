@@ -3,9 +3,7 @@ import {
   getAuthStatus,
   saveCredential,
   removeCredential,
-  validateHackerOne,
-  validateBugcrowd,
-  validateIntigriti,
+  validatePlatformApiKey,
   type PlatformId,
 } from "@/lib/platform-auth";
 
@@ -19,14 +17,22 @@ export async function GET() {
   }
 }
 
-// POST /api/platform-auth — save + validate credentials for one platform
-// Body: { platform: "hackerone"|"bugcrowd"|"intigriti", cookie: "..." }
-// Credentials persist in the local DB and are shared by every project.
+// POST /api/platform-auth — save + validate API-key credentials for one platform
+// Body: { platform: "hackerone"|"bugcrowd"|"intigriti", fields: { ... } }
+// The key is validated against the platform's real API before it is persisted
+// in the local DB; invalid keys are rejected and never stored.
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const platform = body.platform as PlatformId;
-    const cookie: string = (body.cookie || "").trim();
+    const fields: Record<string, string> = {};
+
+    // Accept { fields: {...} } (structured form) — values are trimmed strings.
+    if (body.fields && typeof body.fields === "object") {
+      for (const [k, v] of Object.entries(body.fields)) {
+        if (typeof v === "string" && v.trim()) fields[k] = v.trim();
+      }
+    }
 
     if (!["hackerone", "bugcrowd", "intigriti"].includes(platform)) {
       return NextResponse.json(
@@ -34,19 +40,15 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (!cookie || cookie.length < 10) {
+    if (Object.keys(fields).length === 0) {
       return NextResponse.json(
-        { error: "cookie header value required" },
+        { error: "API key fields required" },
         { status: 400 },
       );
     }
 
-    // Validate against the real platform before persisting
-    let validation;
-    if (platform === "hackerone") validation = await validateHackerOne(cookie);
-    else if (platform === "bugcrowd") validation = await validateBugcrowd(cookie);
-    else validation = await validateIntigriti(cookie);
-
+    // Validate against the real platform API before persisting
+    const validation = await validatePlatformApiKey(platform, fields);
     if (!validation.ok) {
       return NextResponse.json(
         { error: validation.error || "Validation failed" },
@@ -55,8 +57,8 @@ export async function POST(req: NextRequest) {
     }
 
     await saveCredential(platform, {
-      kind: "cookie",
-      value: cookie,
+      kind: "apikey",
+      fields,
       savedAt: new Date().toISOString(),
       verifiedAt: new Date().toISOString(),
       account: validation.account,
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE /api/platform-auth?platform=bugcrowd — logout
+// DELETE /api/platform-auth?platform=bugcrowd — remove the saved API key
 export async function DELETE(req: NextRequest) {
   try {
     const platform = req.nextUrl.searchParams.get("platform") as PlatformId | null;

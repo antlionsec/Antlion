@@ -129,7 +129,7 @@ export function SettingsView() {
               <GlobalSettingChip
                 icon={Globe}
                 label="Platform accounts"
-                desc="Bugcrowd, Intigriti and HackerOne sessions shared by all projects"
+                desc="Bugcrowd, Intigriti and HackerOne API keys shared by all projects"
                 onClick={() => openGlobalSettings("accounts")}
               />
               <GlobalSettingChip

@@ -136,7 +136,7 @@ function timeAgo(iso?: string): string {
 /**
  * Program Discovery — popup feature window.
  * Live listings from all bug bounty platforms with real metrics (avg response,
- * bounties paid, scope counts). Platforms requiring auth show an inline login
+ * bounties paid, scope counts). Platforms requiring auth show an inline API-key
  * prompt; credentials persist across every project.
  */
 export function ProgramDiscoveryDialog() {
@@ -302,8 +302,7 @@ export function ProgramDiscoveryDialog() {
                     <Radio className="h-4 w-4 text-primary animate-pulse-live" />
                   </h2>
                   <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                    Live listings from HackerOne, Bugcrowd, Intigriti, YesWeHack, Immunefi —
-                    real metrics, no mock data.
+                    Live listings from HackerOne, Bugcrowd, Intigriti, YesWeHack, Immunefi and disclose.io .
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -352,8 +351,8 @@ export function ProgramDiscoveryDialog() {
                     <KeyRound className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
                     <span>
                       {needsLoginPlatforms.map((a) => PLATFORM_LABELS[a.platform] || a.platform).join(" and ")}{" "}
-                      {needsLoginPlatforms.length > 1 ? "require" : "requires"} login to load programs &amp; scope.
-                      Connect once — credentials persist for every project.
+                      {needsLoginPlatforms.length > 1 ? "require" : "requires"} an API key to load programs &amp; scope.
+                      Connect once — the key persists for every project.
                     </span>
                   </div>
                   <Button
@@ -423,7 +422,7 @@ export function ProgramDiscoveryDialog() {
                       </TooltipTrigger>
                       <TooltipContent side="bottom">
                         {needsLogin ? (
-                          <span className="text-xs">Login required — click Connect above</span>
+                          <span className="text-xs">API key required — click Connect above</span>
                         ) : isUnknown ? (
                           <span className="text-xs">No sync yet</span>
                         ) : st.ok ? (

@@ -138,7 +138,7 @@ export function DashboardView() {
     <div className="min-h-screen flex flex-col">
       {/* Top header */}
       <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-md">
-        <div className="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between gap-4">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 flex items-center justify-between gap-2 sm:gap-4">
           {/* Brand — logo + title always take the user back to the homepage */}
           <a
             href="/"
@@ -153,16 +153,16 @@ export function DashboardView() {
               draggable={false}
               className="h-9 w-9 object-contain flex-shrink-0"
             />
-            <div>
+            <div className="min-w-0">
               <div className="text-[15px] font-semibold tracking-tight">
                 Antlion
               </div>
-              <div className="text-[11px] text-muted-foreground -mt-0.5">
+              <div className="hidden sm:block text-[11px] text-muted-foreground -mt-0.5">
                 Bug bounty recon workspace
               </div>
             </div>
           </a>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <Button
               variant="ghost"
               size="sm"
@@ -187,6 +187,7 @@ export function DashboardView() {
             <Button
               variant="ghost"
               size="sm"
+              aria-label="Settings"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => openGlobalSettings()}
             >
@@ -196,16 +197,17 @@ export function DashboardView() {
             <Button
               onClick={() => setCreateOpen(true)}
               size="sm"
+              aria-label="New Project"
               className="bg-primary hover:bg-primary/90"
             >
-              <Plus className="h-4 w-4 mr-1.5" />
-              New Project
+              <Plus className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">New Project</span>
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 mx-auto max-w-7xl w-full px-6 py-10 view-enter">
+      <main className="flex-1 mx-auto max-w-7xl w-full px-4 sm:px-6 py-10 view-enter">
         {/* Hero */}
         <div className="mb-10">
           <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-widest text-primary mb-3">
@@ -638,7 +640,7 @@ function CreateProjectDialog({
         <DialogHeader>
           <DialogTitle>Create new project</DialogTitle>
           <DialogDescription>
-            Each project is fully isolated — targets, scans, findings, and reports are scoped exclusively to this project.
+            Create new Project to begin scoping a program, defining targets, and running the pipeline.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">

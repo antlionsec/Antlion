@@ -1,40 +1,59 @@
 // ============================================================================
-// ANTLION — Platform Authentication (persistent, project-independent)
+// ANTLION — Platform Authentication (API-key based, project-independent)
 // ----------------------------------------------------------------------------
-// Some bug bounty platforms restrict program listings / scope data to
-// authenticated researchers:
+// Bug bounty platforms expose official APIs for program + scope data. Antlion
+// authenticates with the platform-issued API credentials — never with copied
+// browser cookies:
 //
-//   • Bugcrowd  — tracker.bugcrowd.com API returns 401 without a session
-//   • Intigriti — full program list + scope requires a researcher session
-//                 (login form is protected by reCAPTCHA, so programmatic
-//                 email/password login is not possible — a browser session
-//                 cookie is used instead)
-//   • HackerOne — public data works anonymously; a session cookie unlocks
-//                 session-visible programs
-//   • YesWeHack / Immunefi / disclose.io — fully public, no auth required
+//   • HackerOne — Hacker API (https://api.hackerone.com)
+//       HTTP Basic auth: API Token identifier + API Token value.
+//       Tokens are created in hackerone.com → Settings → API Tokens.
+//       Unlocks: /v1/hackers/programs (incl. programs visible only to you),
+//       /v1/hackers/programs/{handle}/structured_scopes, scope_exclusions.
+//       Public program data keeps working without any key.
+//
+//   • Bugcrowd — JSON API (https://api.bugcrowd.com)
+//       `Authorization: Token TOKEN_USERNAME:TOKEN_PASSWORD` with
+//       `Accept: application/vnd.bugcrowd+json`.
+//       Credentials are created in bugcrowd.com → profile → API Credentials.
+//       Unlocks: /engagements (briefs + target groups + targets = scope).
+//       The public program listing keeps working without any key.
+//
+//   • Intigriti — Researcher API (https://api.intigriti.com/external/researcher)
+//       `Authorization: Bearer <PAT>`.
+//       Personal Access Tokens are created in app.intigriti.com → profile →
+//       Personal Access Tokens. Required: Intigriti program data is only
+//       available through the authenticated researcher API.
+//
+//   • YesWeHack — fully public REST API, no researcher API keys exist
+//       (their PATs are issued only to Program Manager / BU roles).
+//   • Immunefi — public program data, no researcher API keys exist.
+//   • disclose.io — fully public static registry.
 //
 // Credentials are stored ONCE in the local SQLite database (Setting key
 // "platformAuth") and are therefore available to every project container /
-// pipeline run — there is a single shared, persistent credential store.
-// They are never sent anywhere except the platform they belong to.
+// pipeline run. They are never sent anywhere except the platform they belong
+// to.
 // ============================================================================
 
 const SETTING_KEY = "platformAuth";
 
-export type PlatformId =
-  | "hackerone"
-  | "bugcrowd"
-  | "intigriti"
-  | "yeswehack"
-  | "immunefi"
-  | "disclose";
+import {
+  PLATFORM_META,
+  type PlatformId,
+  type ApiKeyField,
+} from "@/lib/platform-meta";
+
+export { PLATFORM_META };
+export type { PlatformId, ApiKeyField };
 
 export interface StoredCredential {
-  kind: "cookie" | "token";
-  value: string; // cookie header value or API token
+  kind: "apikey";
+  /** Field values keyed by ApiKeyField.key (e.g. { identifier, secret }). */
+  fields: Record<string, string>;
   savedAt: string;
   verifiedAt?: string;
-  account?: string; // username / account identifier when detectable
+  account?: string;
 }
 
 export type AuthStore = Partial<Record<PlatformId, StoredCredential>>;
@@ -48,39 +67,6 @@ export interface AuthStatusEntry {
   verifiedAt?: string;
   hint?: string;
 }
-
-const PLATFORM_META: Record<
-  PlatformId,
-  { label: string; requiresAuth: boolean; method?: "cookie" | "token"; hint?: string }
-> = {
-  hackerone: {
-    label: "HackerOne",
-    requiresAuth: false, // public data works; session unlocks private programs
-    method: "cookie",
-    hint:
-      "Optional. Public programs work without login. Sign in on hackerone.com, then copy your session cookie to also see session-visible programs.",
-  },
-  bugcrowd: {
-    label: "Bugcrowd",
-    requiresAuth: true,
-    method: "cookie",
-    hint:
-      "Sign in on bugcrowd.com in your browser, open DevTools → Network → any request to bugcrowd.com → copy the full Cookie request header, and paste it here. Required to load program scope.",
-  },
-  intigriti: {
-    label: "Intigriti",
-    requiresAuth: true,
-    method: "cookie",
-    hint:
-      "Sign in on app.intigriti.com in your browser, open DevTools → Network → any request to app.intigriti.com → copy the full Cookie request header, and paste it here. Required to load the full program list and scope.",
-  },
-  yeswehack: { label: "YesWeHack", requiresAuth: false },
-  immunefi: { label: "Immunefi", requiresAuth: false },
-  disclose: {
-    label: "disclose.io",
-    requiresAuth: false, // fully public static registry — no auth needed
-  },
-};
 
 // ----------------------------------------------------------------------------
 // Persistence
@@ -96,7 +82,25 @@ export async function getAuthStore(): Promise<AuthStore> {
     const row = await db.setting.findUnique({ where: { id: SETTING_KEY } });
     if (!row) return {};
     try {
-      return JSON.parse(row.value) as AuthStore;
+      const parsed = JSON.parse(row.value) as AuthStore;
+      // Drop credentials stored by the retired cookie-based flow — they are
+      // no longer used by any fetcher and must not show as "connected".
+      let changed = false;
+      for (const k of Object.keys(parsed) as PlatformId[]) {
+        const c = parsed[k];
+        if (c && (c as any).kind !== "apikey") {
+          delete parsed[k];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await db.setting.upsert({
+          where: { id: SETTING_KEY },
+          create: { id: SETTING_KEY, value: JSON.stringify(parsed) },
+          update: { value: JSON.stringify(parsed) },
+        });
+      }
+      return parsed;
     } catch {
       return {};
     }
@@ -137,16 +141,63 @@ export async function getCredential(
   return store[platform];
 }
 
-/** Get the Cookie header value for a platform (empty string when anonymous). */
-export async function getPlatformCookie(platform: PlatformId): Promise<string> {
+// ----------------------------------------------------------------------------
+// Auth headers — the single source of truth every fetcher uses
+// ----------------------------------------------------------------------------
+
+/**
+ * Build the Authorization (+ Accept where needed) headers for a platform's
+ * official API from the stored API-key credential. Returns an empty object
+ * when the platform is public or no key is saved.
+ */
+export async function getPlatformAuthHeaders(
+  platform: PlatformId,
+): Promise<Record<string, string>> {
   const cred = await getCredential(platform);
-  if (cred && cred.kind === "cookie" && cred.value) return cred.value;
-  return "";
+  if (!cred || cred.kind !== "apikey") return {};
+  const f = cred.fields || {};
+  switch (platform) {
+    case "hackerone": {
+      if (!f.identifier || !f.secret) return {};
+      const basic = Buffer.from(`${f.identifier}:${f.secret}`).toString("base64");
+      return { Authorization: `Basic ${basic}`, Accept: "application/json" };
+    }
+    case "bugcrowd": {
+      if (!f.username || !f.password) return {};
+      return {
+        Authorization: `Token ${f.username}:${f.password}`,
+        Accept: "application/vnd.bugcrowd+json",
+      };
+    }
+    case "intigriti": {
+      if (!f.token) return {};
+      return { Authorization: `Bearer ${f.token}`, Accept: "application/json" };
+    }
+    default:
+      return {};
+  }
+}
+
+/** True when a usable API-key credential exists for the platform. */
+export async function hasPlatformApiKey(platform: PlatformId): Promise<boolean> {
+  const cred = await getCredential(platform);
+  if (!cred || cred.kind !== "apikey") return false;
+  const f = cred.fields || {};
+  switch (platform) {
+    case "hackerone":
+      return Boolean(f.identifier && f.secret);
+    case "bugcrowd":
+      return Boolean(f.username && f.password);
+    case "intigriti":
+      return Boolean(f.token);
+    default:
+      return false;
+  }
 }
 
 // ----------------------------------------------------------------------------
-// Validation — each platform has a cheap endpoint that behaves differently
-// for anonymous vs authenticated requests.
+// Validation — each platform is validated against its real API before the
+// credential is persisted. A key that doesn't authenticate is never saved.
 // ----------------------------------------------------------------------------
 
 const UA =
@@ -165,7 +216,7 @@ async function fetchWithTimeout(
     cache: "no-store",
     headers: {
       "User-Agent": UA,
-      Accept: "application/json,text/html;q=0.8,*/*;q=0.5",
+      Accept: "application/json",
       ...(init.headers as Record<string, string>),
     },
   });
@@ -177,110 +228,126 @@ export interface ValidationResult {
   error?: string;
 }
 
-/** Validate a HackerOne session cookie via the GraphQL `me` query. */
-export async function validateHackerOne(cookie: string): Promise<ValidationResult> {
+/**
+ * Validate a HackerOne API token via the official Hacker API `me` endpoint.
+ * Basic auth (identifier:secret). 200 → username; 401 → rejected.
+ */
+export async function validateHackerOne(fields: Record<string, string>): Promise<ValidationResult> {
+  const { identifier, secret } = fields;
+  if (!identifier || !secret) {
+    return { ok: false, error: "Both the token identifier and its value are required" };
+  }
   try {
-    const res = await fetchWithTimeout("https://hackerone.com/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: cookie,
-      },
-      body: JSON.stringify({ query: "query { me { username name } }" }),
+    const basic = Buffer.from(`${identifier}:${secret}`).toString("base64");
+    const res = await fetchWithTimeout("https://api.hackerone.com/v1/hackers/me", {
+      headers: { Authorization: `Basic ${basic}` },
     });
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: `Session rejected (HTTP ${res.status})` };
+      return { ok: false, error: `Token rejected (HTTP ${res.status}) — check the identifier and value` };
+    }
+    if (res.status === 429) {
+      return { ok: false, error: "Rate limited by HackerOne — try again in a minute" };
+    }
+    if (!res.ok) {
+      return { ok: false, error: `HackerOne API returned HTTP ${res.status}` };
     }
     const json = await res.json().catch(() => null);
-    const me = json?.data?.me;
-    if (me) {
-      return { ok: true, account: me.username || me.name };
+    const attrs = json?.data?.attributes;
+    if (attrs?.username || attrs?.name) {
+      return { ok: true, account: attrs.username || attrs.name };
     }
-    return { ok: false, error: "Cookie not recognized as a signed-in session" };
+    // Authenticated but unexpected body — still a valid token per the status.
+    return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message || "network error" };
   }
 }
 
 /**
- * Validate a Bugcrowd session cookie against the tracker API.
- * Anonymous requests get 401 {"error":"You need to sign in..."}.
+ * Validate Bugcrowd API credentials against the official JSON API.
+ * `Authorization: Token username:password` — 200 = valid, 401/403 = invalid.
  */
-export async function validateBugcrowd(cookie: string): Promise<ValidationResult> {
+export async function validateBugcrowd(fields: Record<string, string>): Promise<ValidationResult> {
+  const { username, password } = fields;
+  if (!username || !password) {
+    return { ok: false, error: "Both the token username and password are required" };
+  }
   try {
     const res = await fetchWithTimeout(
-      "https://tracker.bugcrowd.com/api/engagements?per_page=1",
+      "https://api.bugcrowd.com/programs?page[limit]=1",
       {
         headers: {
-          Cookie: cookie,
-          Accept: "application/json",
-          Referer: "https://bugcrowd.com/",
-          "X-Requested-With": "XMLHttpRequest",
+          Authorization: `Token ${username}:${password}`,
+          Accept: "application/vnd.bugcrowd+json",
         },
       },
     );
     if (res.status === 401 || res.status === 403) {
       return {
         ok: false,
-        error: "Session invalid or expired — re-copy the Cookie header from your browser",
+        error: `Token rejected (HTTP ${res.status}) — re-create the credentials and copy both values`,
       };
     }
     if (res.ok) {
-      // Try to detect the researcher handle from the session endpoints
-      let account: string | undefined;
-      try {
-        const j = await res.json();
-        account =
-          j?.researcher?.email || j?.user?.email || j?.current_researcher?.email;
-      } catch {
-        // JSON body unavailable — still authenticated per status code
-      }
-      return { ok: true, account };
+      const json = await res.json().catch(() => null);
+      const first = Array.isArray(json?.data) ? json.data[0] : null;
+      return { ok: true, account: first?.attributes?.name };
     }
-    if (res.status === 302 || res.status === 301) {
-      return { ok: false, error: "Redirected to login — session cookie invalid" };
+    if (res.status === 404) {
+      return {
+        ok: false,
+        error:
+          "Bugcrowd API endpoint unreachable (HTTP 404) — verify the credentials or check whether your network blocks api.bugcrowd.com",
+      };
     }
-    return { ok: false, error: `Unexpected HTTP ${res.status}` };
+    return { ok: false, error: `Bugcrowd API returned HTTP ${res.status}` };
   } catch (e: any) {
     return { ok: false, error: e?.message || "network error" };
   }
 }
 
 /**
- * Validate an Intigriti session cookie via the researcher API.
- * Anonymous requests receive the HTML SPA shell instead of JSON.
+ * Validate an Intigriti PAT against the researcher API program listing.
+ * `Authorization: Bearer <token>` — 200 = valid, 401 = invalid.
  */
-export async function validateIntigriti(cookie: string): Promise<ValidationResult> {
+export async function validateIntigriti(fields: Record<string, string>): Promise<ValidationResult> {
+  const { token } = fields;
+  if (!token) {
+    return { ok: false, error: "Personal Access Token required" };
+  }
   try {
     const res = await fetchWithTimeout(
-      "https://app.intigriti.com/api/researcher/v1/programs?limit=1",
+      "https://api.intigriti.com/external/researcher/v1/programs?limit=1",
       {
-        headers: {
-          Cookie: cookie,
-          Accept: "application/json, text/plain, */*",
-          Referer: "https://app.intigriti.com/researcher/programs",
-          "X-Requested-With": "XMLHttpRequest",
-        },
+        headers: { Authorization: `Bearer ${token}` },
       },
     );
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) {
-      const j = await res.json().catch(() => null);
-      const account =
-        j?.user?.email ||
-        j?.researcher?.email ||
-        (typeof j?.email === "string" ? j.email : undefined);
-      return { ok: true, account };
-    }
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: `Session rejected (HTTP ${res.status})` };
+      return { ok: false, error: `Token rejected (HTTP ${res.status}) — create a fresh PAT and paste it here` };
     }
-    return {
-      ok: false,
-      error: "Cookie not recognized — copy the Cookie header while signed in to app.intigriti.com",
-    };
+    if (res.ok) {
+      return { ok: true };
+    }
+    return { ok: false, error: `Intigriti API returned HTTP ${res.status}` };
   } catch (e: any) {
     return { ok: false, error: e?.message || "network error" };
+  }
+}
+
+/** Validate the API-key fields for a platform (dispatch by id). */
+export async function validatePlatformApiKey(
+  platform: PlatformId,
+  fields: Record<string, string>,
+): Promise<ValidationResult> {
+  switch (platform) {
+    case "hackerone":
+      return validateHackerOne(fields);
+    case "bugcrowd":
+      return validateBugcrowd(fields);
+    case "intigriti":
+      return validateIntigriti(fields);
+    default:
+      return { ok: false, error: "This platform needs no API key — its data is public" };
   }
 }
 
@@ -290,13 +357,18 @@ export async function validateIntigriti(cookie: string): Promise<ValidationResul
 
 export async function getAuthStatus(): Promise<AuthStatusEntry[]> {
   const store = await getAuthStore();
+  const hasKey = Object.fromEntries(
+    await Promise.all(
+      (Object.keys(PLATFORM_META) as PlatformId[]).map(async (p) => [p, await hasPlatformApiKey(p)]),
+    ),
+  );
   return (Object.keys(PLATFORM_META) as PlatformId[]).map((platform) => {
     const meta = PLATFORM_META[platform];
     const cred = store[platform];
     return {
       platform,
       requiresAuth: meta.requiresAuth,
-      authenticated: Boolean(cred?.value),
+      authenticated: Boolean(hasKey[platform]),
       account: cred?.account,
       savedAt: cred?.savedAt,
       verifiedAt: cred?.verifiedAt,
@@ -309,5 +381,3 @@ export function platformRequiresAuth(platform: string): boolean {
   const meta = PLATFORM_META[platform as PlatformId];
   return Boolean(meta?.requiresAuth);
 }
-
-export { PLATFORM_META };

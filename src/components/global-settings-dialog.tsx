@@ -637,9 +637,10 @@ function AccountsTab() {
   return (
     <div className="space-y-2">
       <div className="text-[11px] text-muted-foreground mb-2 leading-relaxed">
-        Connect bug bounty platform sessions once — credentials persist locally in the database and
-        are used automatically by <b>every project</b> (discovery, scope import, pipeline runs).
-        Validated live before saving.
+        Connect bug bounty platforms once with their official API keys — credentials persist
+        locally in the database and are used automatically by <b>every project</b> (discovery,
+        scope import, pipeline runs). Each key is validated against the platform&apos;s API before
+        it is saved.
       </div>
       {authStatus.length === 0 ? (
         <div className="text-xs text-muted-foreground py-4">Loading platform status…</div>

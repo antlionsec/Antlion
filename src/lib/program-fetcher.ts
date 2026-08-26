@@ -8,16 +8,23 @@
 //                     avg resolution hours), resolved_report_count,
 //                     response_efficiency_percentage, bounty table ranges,
 //                     formatted_total_bounties_paid_amount, industry
-//                   · optional session cookie unlocks private programs
+//                   · optional Hacker API token (api.hackerone.com, HTTP Basic)
+//                     merges programs visible only to the account and unlocks
+//                     scope via the official /v1/hackers/programs endpoints
 //   ✓ Bugcrowd     JSON listing at https://bugcrowd.com/programs?format=json
-//                   · scope via tracker.bugcrowd.com API (needs saved session)
+//                   · scope via the official Bugcrowd JSON API
+//                     (api.bugcrowd.com, `Authorization: Token user:pass`):
+//                     /engagements?include=engagement_brief.
+//                     engagement_brief_target_groups.targets
 //   ✓ YesWeHack    REST API at https://api.yeswehack.com/programs
 //                   · avg first response hours + reports count inline
 //   ✓ Immunefi     Community mirror (Cache-and-Burn/projects.json on GitHub)
-//   ✓ Intigriti    Researcher API with saved session cookie; anonymous
-//                  listing requires login.
+//   ✓ Intigriti    Official Researcher API
+//                   (api.intigriti.com/external/researcher, Bearer PAT):
+//                     /v1/programs listing + /v1/programs/{id} details with
+//                     domains (scope) + rules of engagement.
 //   ✓ disclose.io  VDP registry directory at https://directory.disclose.io
-//                  · static HTML directory (org, policy URL, contact,
+//                   · static HTML directory (org, policy URL, contact,
 //                    maturity score); detail pages carry maturity attributes
 //                    (bounty / safe-harbor / scope flags)
 //
@@ -26,7 +33,7 @@
 // is surfaced in the UI's source-status banner.
 // ============================================================================
 
-import { getPlatformCookie } from "@/lib/platform-auth";
+import { getPlatformAuthHeaders, hasPlatformApiKey } from "@/lib/platform-auth";
 
 export type PlatformKind =
   | "hackerone"
@@ -190,8 +197,18 @@ async function fetchHackerOne(): Promise<RawProgram[]> {
   //   • most_recent_sla_snapshot → avg first-response & avg resolution (hours)
   //   • resolved_report_count, response_efficiency_percentage
   //   • bounty table ranges + formatted_total_bounties_paid_amount
-  // A saved session cookie (optional) unlocks session-visible programs.
-  const cookie = await getPlatformCookie("hackerone");
+  // An optional Hacker API token merges in programs visible only to the
+  // account via the official /v1/hackers/programs endpoint.
+  const out = await fetchHackerOnePublicGraphQL();
+  try {
+    await mergeHackerOneApiPrograms(out);
+  } catch {
+    // API-token merge is additive — public data stays intact on failure.
+  }
+  return out;
+}
+
+async function fetchHackerOnePublicGraphQL(): Promise<RawProgram[]> {
   const query = `query PublicPrograms {
     teams(first: 200) {
       edges {
@@ -242,7 +259,6 @@ async function fetchHackerOne(): Promise<RawProgram[]> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(cookie ? { Cookie: cookie } : {}),
     },
     body: JSON.stringify({ query }),
   }, 30000);
@@ -355,6 +371,60 @@ async function fetchHackerOne(): Promise<RawProgram[]> {
     });
   }
   return out;
+}
+
+// ----------------------------------------------------------------------------
+// HackerOne — Hacker API (api.hackerone.com, HTTP Basic with the API token)
+// When a token is saved, /v1/hackers/programs lists every program the account
+// can see (including invitation-only ones missing from the public GraphQL
+// listing). Programs already present keep their rich public metrics; new ones
+// are merged in as private programs.
+// ----------------------------------------------------------------------------
+async function mergeHackerOneApiPrograms(out: RawProgram[]): Promise<void> {
+  if (!(await hasPlatformApiKey("hackerone"))) return;
+  const headers = await getPlatformAuthHeaders("hackerone");
+  const known = new Set(out.map((p) => p.externalId.toLowerCase()));
+  let url: string | null =
+    "https://api.hackerone.com/v1/hackers/programs?page[size]=100";
+  let pages = 0;
+
+  while (url && pages < 10) {
+    const res = await safeFetch(url, { headers }, 20000);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("HackerOne API token rejected — reconnect the account in Global Settings → Platform Accounts");
+    }
+    if (!res.ok) throw new Error(`HackerOne API HTTP ${res.status}`);
+    const json: any = await res.json().catch(() => null);
+    if (!json) break;
+    for (const item of json?.data || []) {
+      const a = item?.attributes || {};
+      const handle: string = (a.handle || item?.id || "").toString();
+      if (!handle || known.has(handle.toLowerCase())) continue;
+      const state: ProgramState =
+        a.submission_state === "paused" || a.state === "paused_mode" ? "paused" :
+        a.submission_state === "closed" ? "closed" : "active";
+      if (state === "closed") continue;
+      // state "public_mode" → public program missing from GraphQL; anything
+      // else (development_mode etc.) → visible to this account only.
+      const isPrivate = a.state !== "public_mode";
+      out.push({
+        name: a.name || handle,
+        platform: "hackerone",
+        externalId: handle,
+        type: isPrivate ? "private" : a.offers_bounties === false ? "vdp" : "bbp",
+        state,
+        url: `https://hackerone.com/${handle}`,
+        logo: a.profile_picture ? `https://hackerone.com${a.profile_picture}` : undefined,
+        policy: a.policy || undefined,
+        inScope: [], // scope is fetched per-program on detail view
+        outScope: [],
+        firstSeenAt: a.started_accepting_at || undefined,
+      });
+    }
+    // JSON API pagination: links.next carries the full next-page URL.
+    url = json?.links?.next || null;
+    pages++;
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -559,107 +629,98 @@ async function fetchImmunefi(): Promise<RawProgram[]> {
 }
 
 // ----------------------------------------------------------------------------
-// Intigriti — researcher API (requires saved session cookie)
-// Intigriti locks its program listing behind researcher authentication. When
-// a session cookie is saved (Global Settings → Platform Accounts), we call the same
-// researcher API the web app uses. Without a session, we surface an honest
-// error asking the user to connect their account.
+// Intigriti — official Researcher API (api.intigriti.com/external/researcher)
+// Program data is only available to authenticated researchers. A Personal
+// Access Token (app.intigriti.com → profile → Personal Access Tokens) is sent
+// as `Authorization: Bearer <PAT>`; the listing returns a paginated
+// { maxCount, records[] } payload per the published swagger schema.
 // ----------------------------------------------------------------------------
 interface IntigritiProgram {
   id?: string;
   handle?: string;
   name?: string;
-  status?: { name?: string; handle?: string } | string;
-  confidentiality?: { handle?: string } | string;
-  severity?: { name?: string } | string;
-  maxBounty?: { value?: number; currency?: string } | number;
-  avgBounty?: { value?: number } | number;
-  domains?: { name?: string; tier?: number }[];
-  bountyTable?: { link?: string };
+  status?: { value?: string; handle?: string; name?: string } | string;
+  confidentialityLevel?: { value?: string; handle?: string } | string;
+  type?: { value?: string; handle?: string } | string;
+  minBounty?: { value?: number } | number;
+  maxBounty?: { value?: number } | number;
+  industry?: string;
+  webLinks?: { detail?: string };
 }
 
-function intigritiStatusName(p: any): string {
-  const s = p?.status;
-  if (!s) return "opened";
-  if (typeof s === "string") return s.toLowerCase();
-  return (s.name || s.handle || "opened").toString().toLowerCase();
+function intigritiEnumValue(v: any): string {
+  if (!v) return "";
+  if (typeof v === "string") return v.toLowerCase();
+  return (v.value || v.handle || v.name || "").toString().toLowerCase();
 }
 
 async function fetchIntigriti(): Promise<RawProgram[]> {
-  const cookie = await getPlatformCookie("intigriti");
-  if (!cookie) {
+  if (!(await hasPlatformApiKey("intigriti"))) {
     throw new Error(
-      "Intigriti requires login — connect your account in Global Settings → Platform Accounts to load programs",
+      "Intigriti requires a Personal Access Token — connect your account in Global Settings → Platform Accounts to load programs",
     );
   }
+  const headers = await getPlatformAuthHeaders("intigriti");
 
   const out: RawProgram[] = [];
-  // Researcher API listing — same endpoint the web app calls
-  for (let page = 0; page < 10; page++) {
+  const limit = 100;
+  let offset = 0;
+  let maxCount = Infinity;
+  let pages = 0;
+
+  while (offset < maxCount && pages < 20) {
     const res = await safeFetch(
-      `https://app.intigriti.com/api/researcher/v1/programs?page=${page}&size=50`,
-      {
-        headers: {
-          Cookie: cookie,
-          Accept: "application/json, text/plain, */*",
-          Referer: "https://app.intigriti.com/researcher/programs",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-      },
+      `https://api.intigriti.com/external/researcher/v1/programs?limit=${limit}&offset=${offset}`,
+      { headers },
       20000,
     );
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Intigriti session expired — refresh the cookie in Global Settings → Platform Accounts");
+      throw new Error("Intigriti token rejected — create a fresh PAT in Global Settings → Platform Accounts");
     }
-    const ct = res.headers.get("content-type") || "";
-    if (!res.ok || !ct.includes("application/json")) {
-      if (page === 0) {
-        throw new Error("Intigriti session not recognized — re-copy the Cookie header while signed in");
-      }
-      break;
-    }
+    if (!res.ok) throw new Error(`Intigriti API HTTP ${res.status}`);
     const data: any = await res.json().catch(() => null);
     if (!data) break;
-    const records: IntigritiProgram[] = data.records || data.items || data.content || data;
+    const records: IntigritiProgram[] = data.records || [];
+    if (typeof data.maxCount === "number") maxCount = data.maxCount;
     if (!Array.isArray(records) || records.length === 0) break;
 
     for (const p of records) {
       const handle: string = (p.handle || p.id || "").toString();
       if (!handle) continue;
-      const statusName = intigritiStatusName(p);
+      const statusName = intigritiEnumValue(p.status);
       const state: ProgramState =
         statusName.includes("close") ? "closed" :
         statusName.includes("pause") || statusName.includes("draft") ? "paused" : "active";
       if (state === "closed") continue;
-      const confidentiality =
-        typeof p.confidentiality === "string"
-          ? p.confidentiality
-          : p.confidentiality?.handle || "public";
-      const type: ProgramType = confidentiality === "invitation" ? "private" : "bbp";
-      const maxB =
-        typeof p.maxBounty === "number" ? p.maxBounty : p.maxBounty?.value;
-      const avgB =
-        typeof p.avgBounty === "number" ? p.avgBounty : p.avgBounty?.value;
+      const confidentiality = intigritiEnumValue(p.confidentialityLevel);
+      const typeName = intigritiEnumValue(p.type);
+      const isPrivate = confidentiality.includes("invitation") || confidentiality.includes("private");
+      const type: ProgramType =
+        isPrivate ? "private" :
+        typeName.includes("vdp") || typeName.includes("vulnerability") ? "vdp" : "bbp";
+      const maxB = typeof p.maxBounty === "number" ? p.maxBounty : p.maxBounty?.value;
+      const minB = typeof p.minBounty === "number" ? p.minBounty : p.minBounty?.value;
       out.push({
         name: p.name || handle,
         platform: "intigriti",
         externalId: `intigriti:${handle}`,
         type,
         state,
-        url: `https://app.intigriti.com/programs/${handle}`,
+        url: p.webLinks?.detail || `https://app.intigriti.com/programs/${handle}`,
+        industry: p.industry || undefined,
         maxBounty: maxB || undefined,
-        avgBounty: avgB || undefined,
+        avgBounty: minB && maxB ? Math.round((minB + maxB) / 2) : undefined,
         inScope: [], // scope is fetched per-program on detail view
         outScope: [],
       });
     }
 
-    const totalPages = data.totalPages || data.pages || data.pagination?.nb_pages;
-    if (totalPages && page + 1 >= totalPages) break;
-    if (records.length < 50) break;
+    offset += records.length;
+    pages++;
+    if (records.length < limit) break;
   }
   if (out.length === 0) {
-    throw new Error("Intigriti returned no programs — check the session cookie");
+    throw new Error("Intigriti returned no programs — check the PAT's permissions");
   }
   return out;
 }
@@ -865,11 +926,96 @@ export interface ProgramMetrics {
 }
 
 // ----------------------------------------------------------------------------
-// HackerOne — per-program scope + metrics via GraphQL `team(handle:)` query
+// HackerOne — per-program scope + metrics
+// With an API token: official Hacker API — /v1/hackers/programs/{handle}/
+// structured_scopes + scope_exclusions (paginated JSON API). Without a token:
+// public GraphQL `team(handle:)` query with inline metrics.
 // ----------------------------------------------------------------------------
 export async function fetchHackerOneScope(handle: string): Promise<ScopeResult> {
   const cleaned = handle.replace(/^hackerone:/i, "");
-  const cookie = await getPlatformCookie("hackerone");
+  if (await hasPlatformApiKey("hackerone")) {
+    try {
+      return await fetchHackerOneScopeViaApi(cleaned);
+    } catch (e: any) {
+      // API path failed (token revoked, network) — fall back to the public
+      // GraphQL query so public programs still resolve.
+    }
+  }
+  return fetchHackerOneScopeViaGraphQL(cleaned);
+}
+
+/** Map a HackerOne asset_type string to our asset kind. */
+function h1AssetKind(aType: string, val: string): ProgramAsset["type"] {
+  const t = (aType || "").toString().toUpperCase();
+  if (t === "URL") return "url";
+  if (t === "DOMAIN") return "domain";
+  if (t === "IP_ADDRESS") return "ip";
+  if (t === "CIDR") return "cidr";
+  if (t.includes("APP")) return "mobile";
+  return classifyAsset(val).type;
+}
+
+async function fetchHackerOneScopeViaApi(handle: string): Promise<ScopeResult> {
+  const headers = await getPlatformAuthHeaders("hackerone");
+  const inScope: ProgramAsset[] = [];
+  const outScope: ProgramAsset[] = [];
+
+  // structured_scopes — follow JSON API pagination via links.next
+  let url: string | null =
+    `https://api.hackerone.com/v1/hackers/programs/${encodeURIComponent(handle)}/structured_scopes?page[size]=100`;
+  let pages = 0;
+  while (url && pages < 6) {
+    const res = await safeFetch(url, { headers }, 20000);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("HackerOne API token rejected — reconnect the account in Global Settings → Platform Accounts");
+    }
+    if (!res.ok) throw new Error(`HackerOne API HTTP ${res.status}`);
+    const json: any = await res.json().catch(() => null);
+    if (!json) break;
+    for (const item of json?.data || []) {
+      const a = item?.attributes || {};
+      const val = (a.asset_identifier || "").toString().trim();
+      if (!val) continue;
+      const asset: ProgramAsset = {
+        value: val,
+        type: h1AssetKind(a.asset_type, val),
+        instructions: a.instruction || undefined,
+      };
+      if (a.eligible_for_submission === false) outScope.push(asset);
+      else inScope.push(asset);
+    }
+    url = json?.links?.next || null;
+    pages++;
+  }
+
+  // scope_exclusions — explicitly out-of-scope categories
+  try {
+    const exRes = await safeFetch(
+      `https://api.hackerone.com/v1/hackers/programs/${encodeURIComponent(handle)}/scope_exclusions`,
+      { headers },
+      15000,
+    );
+    if (exRes.ok) {
+      const exJson: any = await exRes.json().catch(() => null);
+      for (const item of exJson?.data || []) {
+        const a = item?.attributes || {};
+        const label = [a.category, a.details].filter(Boolean).join(" — ");
+        if (!label) continue;
+        if (inScope.some((s) => s.value === label)) continue;
+        outScope.push({ value: label, type: "other", instructions: a.details || undefined });
+      }
+    }
+  } catch {
+    // exclusions are optional — structured scopes are the scope of record
+  }
+
+  if (!inScope.length && !outScope.length) {
+    throw new Error("No scope returned by the HackerOne API");
+  }
+  return { inScope, outScope, policy: undefined, metrics: {} };
+}
+
+async function fetchHackerOneScopeViaGraphQL(handle: string): Promise<ScopeResult> {
   const query = `query TeamScope($handle: String!) {
     team(handle: $handle) {
       id
@@ -903,9 +1049,8 @@ export async function fetchHackerOneScope(handle: string): Promise<ScopeResult> 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(cookie ? { Cookie: cookie } : {}),
     },
-    body: JSON.stringify({ query, variables: { handle: cleaned } }),
+    body: JSON.stringify({ query, variables: { handle } }),
   }, 20000);
   if (!res.ok) throw new Error(`HackerOne HTTP ${res.status}`);
   const json = await res.json();
@@ -955,53 +1100,52 @@ export async function fetchHackerOneScope(handle: string): Promise<ScopeResult> 
 }
 
 // ----------------------------------------------------------------------------
-// Bugcrowd — per-program brief scope via the tracker API
-// The tracker API (tracker.bugcrowd.com/api/engagements/<slug>) requires an
-// authenticated researcher session. When the user has saved their Bugcrowd
-// session cookie (Global Settings → Platform Accounts), we fetch the full brief
-// including the challenges (scope) array. Without a session we surface a
-// clear actionable error instead of fake data.
+// Bugcrowd — per-program scope via the official JSON API
+// With API credentials saved (Global Settings → Platform Accounts):
+//   GET api.bugcrowd.com/engagements?include=engagement_brief.
+//        engagement_brief_target_groups.targets
+// returns every engagement the account can access, its brief, target groups
+// (name / description / in_scope) and the targets inside each group — the
+// documented scope source. Without credentials we try the rare public JSON
+// briefs and otherwise surface a clear actionable error.
 // ----------------------------------------------------------------------------
 export async function fetchBugcrowdScope(handle: string): Promise<ScopeResult> {
   const slug = handle.replace(/^bugcrowd:/i, "").replace(/^engagements?\//i, "");
-  const cookie = await getPlatformCookie("bugcrowd");
 
-  // Authenticated path — tracker API returns the engagement brief JSON
-  if (cookie) {
-    try {
-      const res = await safeFetch(
-        `https://tracker.bugcrowd.com/api/engagements/${slug}`,
-        {
-          headers: {
-            Cookie: cookie,
-            Accept: "application/json",
-            Referer: "https://bugcrowd.com/",
-            "X-Requested-With": "XMLHttpRequest",
-          },
-        },
-        25000,
-      );
+  if (await hasPlatformApiKey("bugcrowd")) {
+    const headers = await getPlatformAuthHeaders("bugcrowd");
+    // Paginate through the account's engagements to find this one by code.
+    let offset = 0;
+    let pages = 0;
+    while (pages < 10) {
+      const url =
+        `https://api.bugcrowd.com/engagements?include=engagement_brief.engagement_brief_target_groups.targets` +
+        `&page[limit]=100&page[offset]=${offset}`;
+      const res = await safeFetch(url, { headers }, 25000);
       if (res.status === 401 || res.status === 403) {
         throw new Error(
-          "Bugcrowd session expired — refresh the session cookie in Global Settings → Platform Accounts",
+          "Bugcrowd API credentials rejected — re-create them in Global Settings → Platform Accounts",
         );
       }
-      if (res.ok) {
-        const ct = res.headers.get("content-type") || "";
-        if (ct.includes("application/json")) {
-          const data: any = await res.json().catch(() => null);
-          if (data) {
-            const parsed = parseBugcrowdBrief(data);
-            if (parsed.inScope.length || parsed.outScope.length) {
-              return parsed;
-            }
-          }
-        }
+      if (!res.ok) throw new Error(`Bugcrowd API HTTP ${res.status}`);
+      const json: any = await res.json().catch(() => null);
+      if (!json) break;
+      const engagements: any[] = json?.data || [];
+      const included: any[] = json?.included || [];
+      const match = engagements.find(
+        (e) => (e?.attributes?.code || "").toString() === slug,
+      );
+      if (match) {
+        const parsed = parseBugcrowdApiEngagement(match, included);
+        if (parsed.inScope.length || parsed.outScope.length) return parsed;
       }
-    } catch (e: any) {
-      if (e?.message?.includes("session expired")) throw e;
-      // fall through to the unauthenticated attempts below
+      if (engagements.length < 100) break;
+      offset += engagements.length;
+      pages++;
     }
+    throw new Error(
+      "Bugcrowd API returned no scope for this engagement — it may not be accessible to your account",
+    );
   }
 
   // Unauthenticated fallbacks — public JSON endpoints (rare, legacy briefs)
@@ -1030,11 +1174,86 @@ export async function fetchBugcrowdScope(handle: string): Promise<ScopeResult> {
     }
   }
   // Bugcrowd's public unauthenticated API does not expose scope targets.
-  // Surface a clear, actionable error so the UI can guide the user to sign
-  // in via Global Settings → Platform Accounts.
+  // Surface a clear, actionable error so the UI can guide the user to connect
+  // an API key via Global Settings → Platform Accounts.
   throw new Error(
-    "Bugcrowd requires authentication to view program scope. Save your Bugcrowd session cookie in Global Settings → Platform Accounts (or the login prompt in Program Discovery) to load live scope data.",
+    "Bugcrowd requires API credentials to load program scope. Create them on bugcrowd.com (profile → API Credentials) and save them in Global Settings → Platform Accounts.",
   );
+}
+
+/**
+ * Parse a Bugcrowd JSON API engagement (with its included brief / target
+ * groups / targets) into scope assets.
+ */
+function parseBugcrowdApiEngagement(engagement: any, included: any[]): ScopeResult {
+  const inScope: ProgramAsset[] = [];
+  const outScope: ProgramAsset[] = [];
+  let policy: string | undefined;
+
+  const byId = new Map<string, any>();
+  for (const i of included || []) byId.set(`${i?.type}:${i?.id}`, i);
+
+  // engagement → current_brief (relationship name per the OpenAPI spec)
+  const rels = engagement?.relationships || {};
+  const briefRel = rels.current_brief || rels.engagement_brief || rels.brief;
+  const briefId = briefRel?.data?.id;
+  const brief = byId.get(`engagement_brief:${briefId}`);
+  if (brief?.attributes) {
+    const ba = brief.attributes;
+    policy =
+      [ba.tagline, ba.description, ba.targets_overview, ba.additional_information]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
+  }
+
+  // brief → engagement_brief_target_groups → targets (nested includes)
+  const groupIds: string[] =
+    (brief?.relationships?.engagement_brief_target_groups?.data || [])
+      .map((r: any) => r?.id)
+      .filter(Boolean) || [];
+  for (const gid of groupIds) {
+    const group = byId.get(`engagement_brief_target_group:${gid}`) ||
+      byId.get(`target_group:${gid}`);
+    const ga = group?.attributes || {};
+    const groupInScope = ga.in_scope !== false;
+    const groupLabel = (ga.name || "").toString().trim();
+    const groupDesc = (ga.description || "").toString().trim();
+
+    const targetIds: string[] =
+      (group?.relationships?.targets?.data || [])
+        .map((r: any) => r?.id)
+        .filter(Boolean) || [];
+    if (targetIds.length === 0 && groupLabel) {
+      // Target group without nested targets — the group itself is the target.
+      const asset: ProgramAsset = {
+        value: groupLabel,
+        type: classifyAsset(groupLabel).type,
+        instructions: groupDesc || undefined,
+      };
+      (groupInScope ? inScope : outScope).push(asset);
+    }
+    for (const tid of targetIds) {
+      const target = byId.get(`target:${tid}`);
+      const ta = target?.attributes || {};
+      const name = (ta.name || "").toString().trim();
+      if (!name) continue;
+      // Bugcrowd target categories: website, API, IOS, Android, IOT, hardware, other
+      const cat = (ta.category || "").toString().toLowerCase();
+      let kind: ProgramAsset["type"] = classifyAsset(name).type;
+      if (cat === "website" || cat === "api") kind = /^https?:\/\//i.test(name) ? "url" : classifyAsset(name).type;
+      if (cat === "ios" || cat === "android") kind = "mobile";
+      const asset: ProgramAsset = {
+        value: name,
+        type: kind,
+        instructions: [groupDesc, groupLabel !== name ? groupLabel : ""]
+          .filter(Boolean)
+          .join(" — ") || undefined,
+      };
+      (groupInScope ? inScope : outScope).push(asset);
+    }
+  }
+
+  return { inScope, outScope, policy, metrics: {} };
 }
 
 /**
@@ -1166,89 +1385,118 @@ export async function fetchYesWeHackScope(slug: string): Promise<ScopeResult> {
 }
 
 // ----------------------------------------------------------------------------
-// Intigriti — per-program scope via the researcher API (auth required)
+// Intigriti — per-program scope via the official Researcher API (PAT required)
+// GET /v1/programs/{programId} returns ProgramDetailViewModel with the full
+// domains version ({ content: [{ type, endpoint, tier, description }] }) and
+// the rules of engagement — per the published swagger schema.
 // ----------------------------------------------------------------------------
 export async function fetchIntigritiScope(handle: string): Promise<ScopeResult> {
   const cleaned = handle.replace(/^intigriti:/i, "");
-  const cookie = await getPlatformCookie("intigriti");
-  if (!cookie) {
+  if (!(await hasPlatformApiKey("intigriti"))) {
     throw new Error(
-      "Intigriti requires login — connect your account in Global Settings → Platform Accounts to load program scope",
+      "Intigriti requires a Personal Access Token — connect your account in Global Settings → Platform Accounts to load program scope",
     );
   }
+  const headers = await getPlatformAuthHeaders("intigriti");
+
+  // The handle used in URLs is not always the program GUID. Resolve it via the
+  // listing (records carry both handle and id) before hitting the detail view.
+  let programId = cleaned;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleaned)) {
+    let offset = 0;
+    let found = false;
+    let pages = 0;
+    while (!found && pages < 20) {
+      const listRes = await safeFetch(
+        `https://api.intigriti.com/external/researcher/v1/programs?limit=100&offset=${offset}`,
+        { headers },
+        20000,
+      );
+      if (listRes.status === 401 || listRes.status === 403) {
+        throw new Error("Intigriti token rejected — create a fresh PAT in Global Settings → Platform Accounts");
+      }
+      if (!listRes.ok) throw new Error(`Intigriti API HTTP ${listRes.status}`);
+      const list: any = await listRes.json().catch(() => null);
+      if (!list) break;
+      const records: any[] = list.records || [];
+      if (!records.length) break;
+      const hit = records.find(
+        (p) => (p.handle || "").toString().toLowerCase() === cleaned.toLowerCase(),
+      );
+      if (hit?.id) {
+        programId = hit.id;
+        found = true;
+        break;
+      }
+      offset += records.length;
+      pages++;
+      if (records.length < 100) break;
+    }
+    if (!found) {
+      throw new Error(`Intigriti program "${cleaned}" was not found in your accessible programs`);
+    }
+  }
+
   const res = await safeFetch(
-    `https://app.intigriti.com/api/researcher/v1/programs/${cleaned}`,
-    {
-      headers: {
-        Cookie: cookie,
-        Accept: "application/json, text/plain, */*",
-        Referer: `https://app.intigriti.com/programs/${cleaned}`,
-        "X-Requested-With": "XMLHttpRequest",
-      },
-    },
+    `https://api.intigriti.com/external/researcher/v1/programs/${encodeURIComponent(programId)}`,
+    { headers },
     20000,
   );
   if (res.status === 401 || res.status === 403) {
-    throw new Error("Intigriti session expired — refresh the cookie in Global Settings → Platform Accounts");
+    throw new Error("Intigriti token rejected — create a fresh PAT in Global Settings → Platform Accounts");
   }
-  const ct = res.headers.get("content-type") || "";
-  if (!res.ok || !ct.includes("application/json")) {
-    throw new Error("Intigriti session not recognized — re-copy the Cookie header while signed in");
+  if (res.status === 404) {
+    throw new Error("Intigriti program not found — it may not be accessible to your account");
   }
+  if (!res.ok) throw new Error(`Intigriti API HTTP ${res.status}`);
   const data: any = await res.json().catch(() => null);
   if (!data) throw new Error("Intigriti invalid JSON response");
 
   const inScope: ProgramAsset[] = [];
   const outScope: ProgramAsset[] = [];
-  // Researcher API payload: domains[] (tier 1/2 = scope), content[].domains[],
-  // and out_of_scope / excluded lists depending on the payload version.
-  for (const d of data.domains || []) {
-    const v = (d.name || d.domain || d.value || "").toString().trim();
+  // ProgramDetailViewModel.domains: { id, createdAt, content: DomainViewModel[] }
+  // DomainViewModel: { type{value}, endpoint, tier{value}, description }
+  const domainContent: any[] = data?.domains?.content || [];
+  for (const d of domainContent) {
+    const v = (d.endpoint || d.name || "").toString().trim();
     if (!v) continue;
-    const tier = d.tier ?? 1;
+    const typeName = intigritiEnumValue(d.type);
+    let kind: ProgramAsset["type"] = classifyAsset(v).type;
+    if (typeName === "url") kind = "url";
+    else if (typeName === "api") kind = "api";
+    else if (typeName === "android" || typeName === "ios") kind = "mobile";
+    else if (typeName === "wildcard") kind = "wildcard";
+    const tierName = intigritiEnumValue(d.tier);
+    const tier = /^\d+$/.test(tierName) ? parseInt(tierName, 10) : 1;
     const asset: ProgramAsset = {
       value: v,
-      type: classifyAsset(v).type,
+      type: kind,
       instructions: d.description || undefined,
     };
-    if (tier >= 3 || d.enabled === false || d.inScope === false) outScope.push(asset);
+    // Tier 3+ marks out-of-scope entries per the researcher API convention.
+    if (tier >= 3 || tierName.includes("out")) outScope.push(asset);
     else inScope.push(asset);
   }
-  // Some payload versions nest scope under content[] entries
-  for (const c of data.content || []) {
-    for (const d of c?.domains || []) {
-      const v = (d.name || d.domain || d.value || "").toString().trim();
-      if (!v) continue;
-      if (inScope.some((a) => a.value === v) || outScope.some((a) => a.value === v)) continue;
-      const tier = d.tier ?? 1;
-      const asset: ProgramAsset = {
-        value: v,
-        type: classifyAsset(v).type,
-        instructions: d.description || c.description || undefined,
-      };
-      if (tier >= 3 || d.enabled === false || d.inScope === false) outScope.push(asset);
-      else inScope.push(asset);
-    }
-  }
-  // Explicit out-of-scope entries when present
-  for (const s of data.out_of_scope || data.outOfScope || []) {
-    const v = (s.name || s.domain || s.value || s.target || "").toString().trim();
-    if (!v) continue;
-    if (inScope.some((a) => a.value === v)) continue;
-    outScope.push({ value: v, type: classifyAsset(v).type });
-  }
+
+  // Rules of engagement carry the policy text
+  const roe = data?.rulesOfEngagement?.content || data?.rulesOfEngagement;
+  const roeText =
+    typeof roe === "string" ? roe :
+    Array.isArray(roe)
+      ? roe.map((r: any) => r?.description || r?.message).filter(Boolean).join("\n\n")
+      : undefined;
 
   const metrics: ProgramMetrics = {
     maxBounty:
-      typeof data.maxBounty === "number" ? data.maxBounty : data.maxBounty?.value || undefined,
+      typeof data?.maxBounty === "number" ? data.maxBounty : data?.maxBounty?.value || undefined,
     avgBounty:
-      typeof data.avgBounty === "number" ? data.avgBounty : data.avgBounty?.value || undefined,
+      typeof data?.minBounty === "number" ? data.minBounty : data?.minBounty?.value || undefined,
   };
 
   return {
     inScope,
     outScope,
-    policy: data.description || data.rules || undefined,
+    policy: roeText || data.description || undefined,
     metrics,
   };
 }
