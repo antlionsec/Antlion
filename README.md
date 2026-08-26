@@ -180,5 +180,4 @@ Provided as-is, without warranty of any kind. You are responsible for complying 
 - **Wiki — setup guides, per-tool notes, and troubleshooting:** <https://github.com/antlionsec/Antlion/wiki>
 - **Issues:** <https://github.com/antlionsec/Antlion/issues>
 
-The **GitHub** and **Wiki** buttons in the app's top bar link to the same places.
 
