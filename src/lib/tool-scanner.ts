@@ -98,9 +98,10 @@ async function whichBinary(binary: string): Promise<string | null> {
 /**
  * Probe a tool's version string. Each tool family has its own version flag —
  * we try a short, curated list and take the first that exits 0 with output.
+ * A tool can declare its exact flag via `versionFlag` in the registry.
  */
-async function probeVersion(binary: string, path: string): Promise<string | null> {
-  const attempts = [
+async function probeVersion(binary: string, path: string, versionFlag?: string): Promise<string | null> {
+  const attempts = versionFlag ? [[versionFlag], ["--version"], ["-V"]] : [
     ["--version"],
     ["version"],
     ["-V"],
@@ -113,11 +114,20 @@ async function probeVersion(binary: string, path: string): Promise<string | null
       });
       const text = (stdout || stderr || "").trim();
       if (text) {
-        // Take the first line, trim to something readable
-        const first = text.split("\n")[0].trim();
-        const vmatch = first.match(/v?\d+\.\d+[\w.\-+]*/);
-        if (vmatch) return vmatch[0];
-        return first.slice(0, 40);
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+        // Prefer a line that explicitly mentions "version" (works for banner-
+        // heavy tools like tlsx that print the number at the end).
+        const versionLine = lines.find((l) => /version/i.test(l) && /\d+\.\d+/.test(l));
+        if (versionLine) {
+          const vmatch = versionLine.match(/v?\d+\.\d+[\w.\-+]*/);
+          if (vmatch) return vmatch[0];
+        }
+        // Otherwise take the first line carrying a version-looking token.
+        for (const l of lines) {
+          const vmatch = l.match(/v?\d+\.\d+[\w.\-+]*/);
+          if (vmatch) return vmatch[0];
+        }
+        return lines[0].slice(0, 40);
       }
     } catch {
       // try next flag
@@ -144,7 +154,7 @@ export async function scanTools(force = false): Promise<ToolScanResult> {
       const path = await whichBinary(tool.binary);
       let version: string | null = null;
       if (path) {
-        version = await probeVersion(tool.binary, path);
+        version = await probeVersion(tool.binary, path, tool.versionFlag);
       }
       const keyDef = TOOL_KEY_DEFS[tool.id];
       return {

@@ -61,3 +61,5 @@ prompt
 server.log
 # Skills directory
 /skills/
+# release zips & deliverables (built by scripts/package-release.py)
+/download/

@@ -12,10 +12,12 @@
 #    Alpine ................................. apk  (bind-tools, go, py3-pip)
 #    Void / Gentoo ......................... xbps / emerge (best effort)
 #
-#  Tools installed (all 21 tools from the Antlion registry):
+#  Tools installed (all 27 tools from the Antlion registry):
 #    subfinder amass assetfinder shuffledns dnsx     (subdomain enum)
 #    gau katana gospider waybackurls                  (url discovery)
 #    httpx nuclei                                     (probing + vuln scan)
+#    nikto dalfox tlsx cariddi                        (web server / XSS / TLS / secrets)
+#    whatweb wpscan                                   (CMS fingerprinting + WordPress)
 #    ffuf dirsearch                                   (content discovery)
 #    trufflehog gitleaks                              (secret detection)
 #    shodan censys zoomeye-cli                        (intelligence)
@@ -170,12 +172,14 @@ if [ "$ROOT" -eq 1 ]; then
   WORDLIST_DIR="/usr/share/wordlists"
   RESOLVERS_FILE="/etc/resolvers.txt"
   CLOUD_ENUM_DIR="/usr/local/share/cloud_enum"
+  NIKTO_DIR="/usr/local/share/nikto"
 else
   GOBIN_DIR="$HOME/.local/bin"
   SECLISTS_DIR="$HOME/.local/share/seclists"
   WORDLIST_DIR="$HOME/.local/share/wordlists"
   RESOLVERS_FILE="$HOME/.config/antlion/resolvers.txt"
   CLOUD_ENUM_DIR="$HOME/.local/share/cloud_enum"
+  NIKTO_DIR="$HOME/.local/share/nikto"
 fi
 mkdir -p "$GOBIN_DIR" 2>/dev/null || true
 export PATH="$GOBIN_DIR:$PATH"
@@ -376,7 +380,7 @@ fi
 # ---------------------------------------------------------------------------
 # STEP 3 - Go-based security tools
 # ---------------------------------------------------------------------------
-step "3/8  Go tools (subfinder, amass, nuclei, httpx, ffuf, ...)"
+step "3/8  Go tools (subfinder, amass, nuclei, httpx, ffuf, dalfox, tlsx, cariddi, ...)"
 
 # name|primary spec|fallback spec|github release repo (optional 4th field:
 # used to fetch a prebuilt release binary when 'go install' is impossible,
@@ -399,6 +403,9 @@ GO_TOOL_SPECS=(
   "trufflehog|github.com/trufflesecurity/trufflehog/v3@latest|github.com/trufflesecurity/trufflehog/v3@master|trufflesecurity/trufflehog"
   "gowitness|github.com/sensepost/gowitness@latest|github.com/sensepost/gowitness/cmd/gowitness@latest"
   "zoomeye-cli|github.com/zoomeye/zoomeye-cli@latest|github.com/zoomeye/zoomeye-cli@master||1"
+  "dalfox|github.com/hahwul/dalfox/v2@latest|github.com/hahwul/dalfox/v2@master|hahwul/dalfox"
+  "tlsx|github.com/projectdiscovery/tlsx/cmd/tlsx@latest|github.com/projectdiscovery/tlsx/cmd/tlsx@master|projectdiscovery/tlsx"
+  "cariddi|github.com/edoardottt/cariddi/cmd/cariddi@latest|github.com/edoardottt/cariddi/cmd/cariddi@master|edoardottt/cariddi"
 )
 
 # Fetch a prebuilt binary from the latest GitHub release of a repo.
@@ -589,6 +596,147 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# STEP 5b - nikto (Perl, from GitHub + vendored XML::Writer)
+# ---------------------------------------------------------------------------
+step "5/8  nikto (web server scanner)"
+
+NIKTO_PERLLIB="$NIKTO_DIR/perllib"
+
+if [ "$FORCE" -eq 0 ] && command -v nikto >/dev/null 2>&1; then
+  skip "nikto already installed ($(command -v nikto))"
+elif ! command -v perl >/dev/null 2>&1; then
+  warn "nikto: perl is required - skipping"
+elif ! command -v git >/dev/null 2>&1; then
+  warn "nikto: git is required - skipping"
+else
+  if [ ! -d "$NIKTO_DIR/.git" ]; then
+    rm -rf "$NIKTO_DIR"
+    info "git clone https://github.com/sullo/nikto.git"
+    if git clone --depth 1 https://github.com/sullo/nikto.git "$NIKTO_DIR" >>"$LOGFILE" 2>&1; then
+      ok "nikto cloned to $NIKTO_DIR"
+    else
+      warn "nikto: git clone failed - skipping"
+    fi
+  fi
+  if [ -d "$NIKTO_DIR/program" ]; then
+    # nikto requires the pure-Perl XML::Writer module; vendor it locally so no
+    # CPAN/system perl packages are needed.
+    if [ ! -f "$NIKTO_PERLLIB/XML/Writer.pm" ]; then
+      NIKTO_TMP="$(mktemp -d)"
+      if curl -fsSL --retry 2 --max-time 60 -o "$NIKTO_TMP/xw.tar.gz" \
+           "https://cpan.metacpan.org/authors/id/J/JO/JOSEPHW/XML-Writer-0.900.tar.gz" >>"$LOGFILE" 2>&1 \
+         && tar -C "$NIKTO_TMP" -xzf "$NIKTO_TMP/xw.tar.gz" >>"$LOGFILE" 2>&1; then
+        mkdir -p "$NIKTO_PERLLIB/XML"
+        cp "$NIKTO_TMP/XML-Writer-0.900/Writer.pm" "$NIKTO_PERLLIB/XML/Writer.pm"
+        ok "vendored XML::Writer -> $NIKTO_PERLLIB/XML/Writer.pm"
+      else
+        warn "nikto: could not vendor XML::Writer (see $LOGFILE)"
+      fi
+      rm -rf "$NIKTO_TMP"
+    fi
+    # Wrapper script (nikto.pl is not directly executable from a PATH dir)
+    cat >"$GOBIN_DIR/nikto" <<WRAPPER
+#!/bin/sh
+export PERL5LIB="$NIKTO_PERLLIB\${PERL5LIB:+:\$PERL5LIB}"
+exec "$(command -v perl)" "$NIKTO_DIR/program/nikto.pl" "\$@"
+WRAPPER
+    chmod 0755 "$GOBIN_DIR/nikto" 2>>"$LOGFILE"
+    if command -v nikto >/dev/null 2>&1 && timeout 20 nikto -Version </dev/null 2>/dev/null | head -1 | grep -q "Nikto"; then
+      ok "nikto -> $GOBIN_DIR/nikto (wrapper around $NIKTO_DIR/program/nikto.pl)"
+    else
+      warn "nikto: installed but the version probe failed (see $LOGFILE)"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# STEP 5c - Ruby tools (whatweb, wpscan) — CMS fingerprinting + WordPress
+# ---------------------------------------------------------------------------
+step "5c/8  Ruby tools (whatweb, wpscan)"
+
+GEM_USER_DIR="$HOME/.local/gems"
+
+ruby_tool_installed() { command -v "$1" >/dev/null 2>&1; }
+
+if [ "$FORCE" -eq 0 ] && ruby_tool_installed whatweb && ruby_tool_installed wpscan; then
+  skip "whatweb + wpscan already installed ($(command -v whatweb), $(command -v wpscan))"
+else
+  if ! command -v ruby >/dev/null 2>&1 || ! command -v gem >/dev/null 2>&1; then
+    info "installing Ruby runtime via $PM ..."
+    if [ "$ROOT" -eq 1 ]; then
+      case "$FAMILY" in
+        apt)    pm_install ruby-full   && pm_install ruby-dev ;;
+        pacman) pm_install ruby ;;
+        dnf)    pm_install ruby       && pm_install ruby-devel ;;
+        zypper) pm_install ruby ;;
+        apk)    pm_install ruby       && pm_install ruby-dev ;;
+        xbps)   pm_install ruby ;;
+        emerge) pm_install dev-lang/ruby ;;
+        *)      warn "unhandled package family for ruby: $FAMILY" ;;
+      esac
+    else
+      warn "no root - cannot install ruby via $PM (whatweb/wpscan need it)"
+    fi
+  fi
+
+  if command -v gem >/dev/null 2>&1; then
+    # Native gem extensions (nokogiri, typhoeus, ffi ...) need a toolchain;
+    # modern gems ship precompiled binaries so this is best-effort only.
+    if [ "$ROOT" -eq 1 ] && ! command -v gcc >/dev/null 2>&1; then
+      case "$FAMILY" in
+        apt)    pm_install build-essential ;;
+        pacman) pm_install base-devel ;;
+        dnf)    pm_install gcc-c++ && pm_install make ;;
+        apk)    pm_install build-base ;;
+      esac || true
+    fi
+
+    if [ "$ROOT" -eq 1 ]; then
+      info "gem install whatweb wpscan (system-wide)"
+      if gem install --no-document whatweb wpscan >>"$LOGFILE" 2>&1; then
+        ok "ruby gems installed (whatweb, wpscan)"
+      else
+        warn "gem install failed for whatweb/wpscan (see $LOGFILE) - CMS tools stay unavailable"
+      fi
+    else
+      info "gem install whatweb wpscan (user-mode -> $GEM_USER_DIR)"
+      if GEM_HOME="$GEM_USER_DIR" gem install --no-document whatweb wpscan >>"$LOGFILE" 2>&1; then
+        # The gem binstubs need GEM_PATH to resolve their gems — wrap them.
+        for t in whatweb wpscan; do
+          if [ -x "$GEM_USER_DIR/bin/$t" ]; then
+            cat >"$GOBIN_DIR/$t" <<WRAPPER
+#!/bin/sh
+# RubyGems wrapper (user-mode install: gems live in $GEM_USER_DIR)
+export GEM_PATH="$GEM_USER_DIR\${GEM_PATH:+:\$GEM_PATH}"
+exec "$GEM_USER_DIR/bin/$t" "\$@"
+WRAPPER
+            chmod 0755 "$GOBIN_DIR/$t" 2>>"$LOGFILE"
+            ok "$t -> $GOBIN_DIR/$t (wrapper around $GEM_USER_DIR/bin/$t)"
+          else
+            warn "$t: gem binstub missing after install (see $LOGFILE)"
+          fi
+        done
+      else
+        warn "user-mode gem install failed for whatweb/wpscan (see $LOGFILE) - CMS tools stay unavailable"
+      fi
+    fi
+
+    # Verify both tools actually run
+    for t in whatweb wpscan; do
+      if ruby_tool_installed "$t"; then
+        if timeout 60 "$t" --version </dev/null 2>>"$LOGFILE" | head -n5 | grep -qiE "version|[0-9]+\.[0-9]+"; then
+          ok "$t runs ($($t --version </dev/null 2>/dev/null | grep -oiE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1))"
+        else
+          warn "$t installed but the version probe failed (see $LOGFILE)"
+        fi
+      fi
+    done
+  else
+    warn "ruby/gem unavailable - skipping whatweb + wpscan (CMS scanning layer)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # STEP 6 - SecLists wordlists + default wordlist links + public resolvers
 # ---------------------------------------------------------------------------
 step "6/8  SecLists wordlists + DNS resolvers"
@@ -672,7 +820,7 @@ fi
 # ---------------------------------------------------------------------------
 # Final verification + summary
 # ---------------------------------------------------------------------------
-ALL_TOOLS="subfinder amass assetfinder shuffledns dnsx cloud_enum gau katana gospider waybackurls httpx nuclei shodan censys zoomeye-cli trufflehog gitleaks nmap ffuf dirsearch gowitness"
+ALL_TOOLS="subfinder amass assetfinder shuffledns dnsx cloud_enum gau katana gospider waybackurls httpx nuclei nikto dalfox tlsx cariddi whatweb wpscan shodan censys zoomeye-cli trufflehog gitleaks nmap ffuf dirsearch gowitness"
 
 printf '\n%s\n' "${C_B}=================== INSTALLATION SUMMARY ===================${C_0}"
 printf '  OS: %s | family: %s | mode: %s\n' "$OS_NAME" "$FAMILY" "$([ "$ROOT" -eq 1 ] && echo root || echo user)"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# ANTLION — release packaging script
+# ANTLION — release packaging script (CLEAN build)
 #
-# Builds download/antlion-v0.3.0.zip — a clean, structured, ready-to-run
-# snapshot of the project:
+# Builds download/antlion-v0.5.0.zip — a clean, structured, ready-to-run
+# snapshot of the project with optional/dev-only files stripped:
 #
 #   antlion/
 #     README.md, LICENSE, package.json, configs, .env.example, .gitignore
@@ -10,17 +10,25 @@
 #     prisma/         schema (db is created on first run)
 #     public/         brand assets (transparent logo set, favicon, icons)
 #     docs/           screenshots + sample report
-#     scripts/        installer, seeders, e2e test suites, dev utilities
-#     tests/          container/runtime build tests
+#     scripts/        install-tools.sh ONLY (README-referenced tool installer)
 #
-# Excluded on purpose: node_modules, .next, db/ (user data), logs,
-# worklog/tool-results/upload/download/skills (session artifacts).
+# Excluded on purpose (besides node_modules, .next, db/, logs and session
+# artifacts):
+#   - tests/           dead template leftovers (reference python-runtime /
+#                      next-service-dist build paths that don't exist here)
+#   - scripts/e2e-*    e2e proof suites — dev-machine only
+#   - scripts/test-*   local test targets / parsers — dev-machine only
+#   - scripts/seed-*   demo data seeders
+#   - dump-db.mjs, smtp-test-server.mjs, webhook-receiver.mjs,
+#     check-excluded.mjs, make-logo-assets.py, package-release.py,
+#     start-dev.sh     debug / one-off / maintainer / sandbox utilities
+# None of these are referenced by README.md, package.json or src/.
 
 import os
 import zipfile
 
 ROOT = "/home/z/my-project"
-OUT = os.path.join(ROOT, "download", "antlion-v0.3.0.zip")
+OUT = os.path.join(ROOT, "download", "antlion-v0.5.0.zip")
 PREFIX = "antlion"
 
 ROOT_FILES = [
@@ -40,14 +48,22 @@ ROOT_FILES = [
     "bun.lock",
 ]
 
-DIRS = ["src", "prisma", "public", "docs", "scripts", "tests"]
+DIRS = ["src", "prisma", "public", "docs", "scripts"]
+
+# scripts/ ships ONLY the installer; every other file there is dev-only.
+DIR_FILE_WHITELIST = {"scripts": {"install-tools.sh"}}
 
 SKIP_FILENAMES = {"logo-qa.jpg"}  # QA intermediate, not a deliverable
 
 EXT_DENY = {".log"}
 
 def include_dir_file(rel: str) -> bool:
+    parts = rel.split(os.sep)
     name = os.path.basename(rel)
+    # per-directory whitelist (clean release: scripts/ = installer only)
+    if len(parts) >= 2 and parts[0] in DIR_FILE_WHITELIST:
+        if name not in DIR_FILE_WHITELIST[parts[0]]:
+            return False
     if name in SKIP_FILENAMES:
         return False
     if os.path.splitext(name)[1] in EXT_DENY:
@@ -108,7 +124,12 @@ def main() -> None:
         ]:
             if must not in names:
                 raise SystemExit(f"missing expected entry: {must}")
-        print("integrity OK — all critical entries present")
+        # clean-release guarantees: no dev scripts, no dead tests tree
+        leaked = [n for n in names if n.startswith(f"{PREFIX}/tests/")]
+        dev_scripts = [n for n in names if n.startswith(f"{PREFIX}/scripts/") and n != f"{PREFIX}/scripts/install-tools.sh"]
+        if leaked or dev_scripts:
+            raise SystemExit(f"clean-release violation: {leaked + dev_scripts}")
+        print("integrity OK — all critical entries present, zero optional files")
 
 if __name__ == "__main__":
     main()

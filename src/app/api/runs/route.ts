@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PIPELINE_STAGES, TOOLS, type ParsedFinding } from "@/lib/pipeline-config";
 import { dispatchNotifications, type NotifyFinding } from "@/lib/notify";
 
@@ -208,6 +211,8 @@ interface ToolRunResult {
   stdout: string;
   stderr: string;
   cancelled: boolean;
+  /** Process exit code — null when killed by timeout. */
+  exitCode: number | null;
 }
 
 /**
@@ -220,14 +225,21 @@ function runToolProcess(
   runId: string,
   binary: string,
   argv: string[],
-  opts: { env?: NodeJS.ProcessEnv; timeoutMs: number },
+  opts: { env?: NodeJS.ProcessEnv; timeoutMs: number; stdinData?: string },
 ): Promise<ToolRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, argv, {
       env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [opts.stdinData !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
     trackChild(runId, child);
+
+    // Tools that read their target list from stdin (cariddi, httpx -l -).
+    // EPIPE is tolerated: the tool may exit before consuming everything.
+    if (opts.stdinData !== undefined && child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(opts.stdinData);
+    }
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -235,10 +247,10 @@ function runToolProcess(
     let settled = false;
 
     const cap = 64 * 1024 * 1024; // 64 MB output cap per stream
-    child.stdout.on("data", (d: Buffer) => {
+    child.stdout?.on("data", (d: Buffer) => {
       if (stdoutChunks.reduce((a, c) => a + c.length, 0) < cap) stdoutChunks.push(d);
     });
-    child.stderr.on("data", (d: Buffer) => {
+    child.stderr?.on("data", (d: Buffer) => {
       if (stderrChunks.reduce((a, c) => a + c.length, 0) < cap) stderrChunks.push(d);
     });
 
@@ -281,15 +293,27 @@ function runToolProcess(
     child.on("close", (code) => {
       const stdout = stdoutChunks.map((c) => c.toString()).join("");
       const stderr = stderrChunks.map((c) => c.toString()).join("");
-      if (cancelled) {
-        finish(null, { stdout, stderr, cancelled: true });
-      } else if (code === 0) {
-        finish(null, { stdout, stderr, cancelled: false });
-      } else {
-        finish(new Error(`Tool exited with code ${code}${stderr ? `: ${stderr.split("\n").slice(-3).join(" ").slice(0, 300)}` : ""}`));
-      }
+      // Non-zero exits are NOT thrown here: scanners like nikto routinely exit
+      // 1 after a partially-failed scan while still emitting valid findings.
+      // The stage loop records the code as a warning and parses whatever real
+      // output was produced. `cancelled` reflects a kill ordered by the status
+      // poller (user pressed Cancel) — the stage loop turns it into an honest
+      // "Cancelled by user" log line and aborts the run.
+      finish(null, { stdout, stderr, cancelled, exitCode: code });
     });
   });
+}
+
+/** Read a tool's file-based report back into the stdout stream. */
+async function readToolOutputFile(outputFile: string | null): Promise<string> {
+  if (!outputFile) return "";
+  try {
+    const content = await readFile(outputFile, "utf8");
+    return content.trim() ? (content.endsWith("\n") ? content : content + "\n") : "";
+  } catch {
+    // Tool did not write the file (aborted early, non-WP target, …)
+    return "";
+  }
 }
 
 /** Mark the current stage cancelled + remaining stages skipped + finalize run. */
@@ -425,17 +449,37 @@ async function executeRun(
       // Pause point before spawning the next tool
       await waitWhilePaused(runId);
 
+      // Tools that report via a file (wpscan) get a private temp file that the
+      // executor reads back into stdout after the process exits.
+      let outputDir: string | null = null;
+      let outputFile: string | null = null;
+      if (tool.usesOutputFile) {
+        try {
+          outputDir = await mkdtemp(join(tmpdir(), "antlion-toolout-"));
+          outputFile = join(outputDir, "report.jsonl");
+        } catch (e: any) {
+          logPush("wrn", `[${tool.name}] could not create temp output file (${e?.message}) — continuing with stdout`);
+        }
+      }
+
       const argv = tool.buildArgs
-        ? tool.buildArgs(targetValues, config?.toolOverrides?.[toolId])
+        ? tool.buildArgs(targetValues, config?.toolOverrides?.[toolId], outputFile ? { outputFile } : undefined)
         : [...tool.defaultArgs, ...targetValues];
 
       logPush("inf", `[INF] Running ${tool.name} (${tool.binary} ${argv.join(" ")})`);
       await persistLogs();
 
       try {
+        const stdinData = tool.buildStdin
+          ? tool.buildStdin(targetValues, config?.toolOverrides?.[toolId])
+          : undefined;
+        if (stdinData !== undefined) {
+          logPush("inf", `[INF] ${tool.name}: ${targetValues.length} target(s) piped via stdin`);
+        }
         const result = await runToolProcess(runId, tool.binary, argv, {
           env: toolEnv,
           timeoutMs: 1000 * 60 * 15, // 15 min per tool
+          stdinData,
         });
 
         if (result.cancelled) {
@@ -444,8 +488,16 @@ async function executeRun(
           throw new RunCancelledError(`Cancelled during ${tool.name}`);
         }
 
-        const stdout = result.stdout || "";
+        const stdout = (result.stdout || "") + (await readToolOutputFile(outputFile));
+        if (outputDir) await rm(outputDir, { recursive: true, force: true }).catch(() => {});
         const stderr = result.stderr || "";
+
+        if (result.exitCode !== 0) {
+          // Real exit-code warning (scanner finished with errors — nikto is a
+          // common case). Output produced up to this point is still parsed.
+          const tail = stderr ? `: ${stderr.split("\n").slice(-2).join(" ").slice(0, 200)}` : "";
+          logPush("wrn", `[${tool.name}] exited with code ${result.exitCode} — results may be partial${tail}`);
+        }
 
         if (stderr) {
           for (const line of stderr.split("\n").slice(-20)) {
@@ -481,6 +533,8 @@ async function executeRun(
         const level = err?.code === "ENOENT" ? "wrn" : "err";
         logPush(level, `[${tool.name}] ${msg}`);
         await persistLogs();
+      } finally {
+        if (outputDir) await rm(outputDir, { recursive: true, force: true }).catch(() => {});
       }
     }
 
@@ -574,6 +628,9 @@ async function executeRun(
         try { c.kill("SIGKILL"); } catch {}
       }
       activeChildren.delete(runId);
+      // Honest log line for cancels noticed BETWEEN tools (the in-flight kill
+      // case is logged by the tool loop itself).
+      currentLogs.push({ ts: new Date().toISOString(), level: "wrn", text: `Cancelled by user — ${err.message}` });
       await finalizeCancelledRun(runId, projectId, currentStageRowId, stages.length, stagesDone, currentLogs);
       return; // cancelled runs do not dispatch completion notifications
     }

@@ -213,7 +213,7 @@ export function DashboardView() {
             <span>Local-first · No cloud · No telemetry</span>
           </div>
           <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight mb-3 max-w-3xl leading-[1.1]">
-            Six platforms. Twenty-one tools.{" "}
+            Six platforms. Twenty-seven tools.{" "}
             <span className="text-primary">Nothing out of scope.</span>
           </h1>
           <p className="text-muted-foreground max-w-2xl text-[15px] leading-relaxed">

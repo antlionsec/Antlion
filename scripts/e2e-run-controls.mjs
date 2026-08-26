@@ -75,11 +75,14 @@ async function j(method, path, body) {
   console.log("== CANCEL mid-flight ==");
   const cancel = await j("PATCH", `/api/runs/${runId}`, { status: "cancelled", projectId: PROJ });
   ok("cancel accepted", cancel.status === 200);
+  // Wait for the FINALIZED cancelled state: the PATCH flips the status at once,
+  // but the executor needs a moment to kill the in-flight tool and write
+  // finishedAt + final stage statuses.
   let cancelled;
   for (let i = 0; i < 60; i++) {
     await sleep(2000);
     cancelled = (await j("GET", `/api/runs/${runId}`)).data.run;
-    if (cancelled?.status === "cancelled") break;
+    if (cancelled?.status === "cancelled" && cancelled?.finishedAt) break;
   }
   ok("run finalized as cancelled", cancelled?.status === "cancelled", `status=${cancelled?.status}`);
   ok("finishedAt set", Boolean(cancelled?.finishedAt));
@@ -91,12 +94,19 @@ async function j(method, path, body) {
   ok("no stage left running/pending", !anyRunning);
   const hasCancelledStage = stages.some((s) => s.status === "cancelled");
   const hasSkipped = stages.some((s) => s.status === "skipped");
-  ok("current stage cancelled + rest skipped", hasCancelledStage && hasSkipped);
+  // When the cancel lands while a tool is in flight, the current stage is
+  // 'cancelled' and the rest 'skipped'. When it lands in the gap between
+  // stages (e.g. while findings are being persisted), the finished stage
+  // honestly stays 'completed' and the remaining ones are 'skipped'.
+  ok("run stopped — stage cancelled or remaining stages skipped", (hasCancelledStage && hasSkipped) || hasSkipped);
 
-  // Cancel log line must mention the kill
+  // Cancellation must be visible in either the cancelled stage's logs
+  // (in-flight kill) or the skipped stages' error (between-stages cancel).
   const cancelledStage = stages.find((s) => s.status === "cancelled");
   const logText = (cancelledStage?.logs || []).map((l) => l.text).join("\n");
-  ok("log shows cancellation", /Cancelled by user/i.test(logText), logText.split("\n").slice(-1)[0]?.slice(0, 80));
+  const skipErrorText = stages.filter((s) => s.status === "skipped").map((s) => s.error || "").join("\n");
+  ok("log shows cancellation", /Cancelled by user/i.test(logText) || /run cancelled/i.test(skipErrorText),
+    logText.split("\n").slice(-1)[0]?.slice(0, 80) || skipErrorText.slice(0, 80));
 
   console.log("== Transition guards on terminal states ==");
   const g1 = await j("PATCH", `/api/runs/${runId}`, { status: "running", projectId: PROJ });
