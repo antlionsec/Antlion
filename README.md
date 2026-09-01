@@ -96,8 +96,8 @@ The app ships with a dark and a light theme (it follows your system preference) 
 **Prerequisites:** Node.js 20+ (or Bun), and a Linux/macOS/WSL machine. The web app itself runs anywhere Node runs; the pipeline tools are detected from your `PATH` at runtime.
 
 ```bash
-git clone <repository-url> antlion
-cd antlion
+git clone <https://github.com/antlionsec/Antlion> Antlion
+cd Antlion
 
 npm install              # or: bun install
 
@@ -130,7 +130,7 @@ Want a ping when a run finishes or a critical finding lands? **Settings** → *N
 
 ## Quick start
 
-1. **Create a project.** Name it after the program you're hunting (`Acme Corp — Q3`, whatever). Everything downstream — targets, runs, findings, reports — lives inside this project.
+1. **Create a project.** Name it after the program you're hunting . Everything downstream — targets, runs, findings, reports — lives inside this project.
 2. **Discover a program.** Hit *Discover a Program*, search across the six platforms, and open a program to see its scope, bounty metrics, and response stats. *Import to this project* pulls the in-scope assets and out-of-scope exclusions in.
 3. **Check your targets.** The Target Selection view shows what's in and what's hard-excluded. Remove anything you don't want touched.
 4. **Configure the pipeline.** Pipeline Config shows the nine stages and which tools on your machine are available for each. Tune per-tool arguments if you care, leave defaults if you don't.
