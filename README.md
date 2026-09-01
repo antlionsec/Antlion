@@ -96,7 +96,7 @@ The app ships with a dark and a light theme (it follows your system preference) 
 **Prerequisites:** Node.js 20+ (or Bun), and a Linux/macOS/WSL machine. The web app itself runs anywhere Node runs; the pipeline tools are detected from your `PATH` at runtime.
 
 ```bash
-git clone <https://github.com/antlionsec/Antlion> Antlion
+git clone https://github.com/antlionsec/Antlion Antlion
 cd Antlion
 
 npm install              # or: bun install
